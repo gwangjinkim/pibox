@@ -48,8 +48,10 @@ cd pisbx
 ```
 
 `install.sh` detects your OS and package manager, offers to install missing
-prerequisites with one confirmation, and prints a numbered manual guide when it
-cannot automate (for example, no Homebrew or no supported package manager).
+prerequisites with one confirmation, and then attempts them one at a time in
+dependency order. If an automatic install fails, it prints the exact manual steps
+for that dependency and continues with the next (for example, no Homebrew or no
+supported package manager).
 
 ```bash
 ./install.sh --check    # show the plan, install nothing

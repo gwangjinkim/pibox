@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install pisbx and, with permission, its prerequisites.
+# Install pisbx and, with permission, its prerequisites one at a time.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +35,7 @@ printf 'installed: %s\n\n' "$target"
 have() { command -v "$1" >/dev/null 2>&1; }
 
 WSL=0
-if grep -qi microsoft /proc/version 2>/dev/null; then WSL=1; fi
+grep -qi microsoft /proc/version 2>/dev/null && WSL=1
 
 detect_os() {
   case "$(uname -s)" in
@@ -55,10 +55,7 @@ detect_os() {
 OS="$(detect_os)"
 
 detect_pm() {
-  case "$OS" in
-    macos) have brew && { echo brew; return; } ;;
-    windows) have winget && { echo winget; return; } ;;
-  esac
+  if [ "$OS" = macos ]; then have brew && { echo brew; return; }; fi
   for pm in apt-get dnf pacman zypper apk yum; do
     have "$pm" && { echo "$pm"; return; }
   done
@@ -74,7 +71,6 @@ pm_cmd() {
     pacman) echo "sudo pacman -S --needed --noconfirm $*" ;;
     zypper) echo "sudo zypper install -y $*" ;;
     apk) echo "sudo apk add $*" ;;
-    winget) echo "winget install $*" ;;
     *) echo "" ;;
   esac
 }
@@ -90,45 +86,155 @@ pkg_names() {
 status() { printf '  %-5s %s\n' "$1" "$2"; }
 
 # ---------------------------------------------------------------- detection
+ORDER=(jq python3 openssl git node skey pi docker)
 MISSING=()
-PLAN=()
-NO_RUNTIME=0
-SANDBOX_OK=0
 DOCKER_BIN=0
 LIMA_BIN=0
+DOCKER_DOWN=0
+SANDBOX_OK=0
 
 detect() {
-  MISSING=(); PLAN=(); NO_RUNTIME=0; SANDBOX_OK=0; DOCKER_BIN=0; LIMA_BIN=0
-  for cmd in jq python3 openssl git skey node pi; do
-    have "$cmd" || MISSING+=("$cmd")
+  MISSING=(); DOCKER_BIN=0; LIMA_BIN=0; DOCKER_DOWN=0; SANDBOX_OK=0
+  for dep in "${ORDER[@]}"; do
+    case "$dep" in
+      docker) ;;
+      *) have "$dep" || MISSING+=("$dep") ;;
+    esac
   done
-  DOCKER_DOWN=0
   have docker && DOCKER_BIN=1
-  if [ "$DOCKER_BIN" == 1 ] && ! docker info >/dev/null 2>&1; then DOCKER_DOWN=1; fi
   have limactl && LIMA_BIN=1
-  if [ "$DOCKER_BIN" == 0 ] && [ "$LIMA_BIN" == 0 ]; then
-    MISSING+=("docker"); NO_RUNTIME=1
-  fi
+  if [ "$DOCKER_BIN" == 0 ] && [ "$LIMA_BIN" == 0 ]; then MISSING+=("docker"); fi
+  if [ "$DOCKER_BIN" == 1 ] && ! docker info >/dev/null 2>&1; then DOCKER_DOWN=1; fi
   local sandbox_pi="${PISBX_SANDBOX_PI:-$HOME/.pi/agent/npm/node_modules/.bin/pi}"
   if [ -x "$sandbox_pi" ] && "$sandbox_pi" --help 2>&1 | grep -q -- '--remote <url>'; then
     SANDBOX_OK=1
   fi
 }
 
+dep_present() {
+  case "$1" in
+    docker) have docker || have limactl ;;
+    *) have "$1" ;;
+  esac
+}
+
+dep_title() {
+  case "$1" in
+    jq) echo "jq (JSON parsing)" ;;
+    python3) echo "python3 (helper + TOML parsing)" ;;
+    openssl) echo "openssl (daemon token)" ;;
+    git) echo "git (update + git workspace)" ;;
+    node) echo "node + npm (pi runtime)" ;;
+    skey) echo "skey (OS keyring vault)" ;;
+    pi) echo "pi (agent CLI)" ;;
+    docker) echo "docker or lima (sandbox runtime)" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+dep_cmd() {
+  case "$1" in
+    jq|python3|openssl|git|node) pm_cmd "$(pkg_names "$1")" ;;
+    skey)
+      if have cargo; then echo "cargo install skey"
+      elif have go; then echo "go install github.com/gwangjinkim/skey/skey-go@latest"
+      else echo ""; fi ;;
+    pi)
+      if have npm; then echo "npm install -g @earendil-works/pi-coding-agent"
+      else echo ""; fi ;;
+    docker)
+      case "$OS" in
+        macos) if have brew; then echo "brew install --cask docker"; else echo ""; fi ;;
+        ubuntu|debian|pop|linuxmint)
+          echo "sudo apt-get update && sudo apt-get install -y docker.io && sudo usermod -aG docker \"$USER\" && (sudo systemctl enable --now docker || sudo service docker start)" ;;
+        fedora|rhel|centos) echo "sudo dnf install -y docker && sudo systemctl enable --now docker" ;;
+        arch|manjaro) echo "sudo pacman -S --needed --noconfirm docker && sudo systemctl enable --now docker" ;;
+        alpine) echo "sudo apk add docker && sudo rc-update add docker default && sudo service docker start" ;;
+        opensuse*|suse) echo "sudo zypper install -y docker && sudo systemctl enable --now docker" ;;
+        *) echo "" ;;
+      esac ;;
+    *) echo "" ;;
+  esac
+}
+
+dep_hint() {
+  case "$1" in
+    jq|python3|openssl|git|node)
+      local pkgs cmd; pkgs="$(pkg_names "$1")"; cmd="$(pm_cmd "$pkgs")"
+      if [ -n "$cmd" ]; then
+        printf '  install with:\n    %s\n' "$cmd"
+      else
+        if [ "$OS" = macos ]; then
+          printf '  no package manager found (Homebrew is not installed)\n'
+          printf '  install Homebrew first:\n'
+          printf '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"\n'
+          printf '  then re-run: ./install.sh\n'
+        elif [ "$OS" = windows ] && [ "$WSL" = 0 ]; then
+          printf '  use WSL2:\n    wsl --install -d Ubuntu\n  then run this installer inside Ubuntu\n'
+        else
+          printf '  install %s with your distribution package manager\n' "$pkgs"
+        fi
+      fi
+      if [ "$1" = node ]; then
+        printf '    verify: node --version && npm --version\n'
+      fi ;;
+    skey)
+      if have cargo; then
+        printf '    cargo install skey\n'
+      elif have go; then
+        printf '    go install github.com/gwangjinkim/skey/skey-go@latest\n'
+      else
+        printf '    install Rust:  curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh\n'
+        printf '    then:          cargo install skey\n'
+        printf '    or Go:         https://go.dev/dl/ then go install github.com/gwangjinkim/skey/skey-go@latest\n'
+      fi
+      printf '    verify: skey --help\n' ;;
+    pi)
+      if have npm; then
+        printf '    npm install -g @earendil-works/pi-coding-agent\n'
+      else
+        printf '    install node/npm first (see above), then:\n'
+        printf '    npm install -g @earendil-works/pi-coding-agent\n'
+      fi
+      printf '    verify: pi --version\n' ;;
+    docker)
+      case "$OS" in
+        macos)
+          printf '    option A: Docker Desktop  https://docs.docker.com/desktop/install/mac-install/\n'
+          printf '    option B: brew install colima docker && colima start\n'
+          printf '    option C: brew install lima   (VM runtime)\n' ;;
+        windows)
+          printf '    install Docker Desktop with the WSL2 backend:\n'
+          printf '      https://docs.docker.com/desktop/install/windows-install/\n'
+          printf '    run pisbx inside WSL2, not Git Bash\n' ;;
+        *)
+          case "$PM" in
+            apt-get) printf '    sudo apt-get install -y docker.io\n    sudo usermod -aG docker "$USER"\n    sudo systemctl enable --now docker   # or: sudo service docker start\n' ;;
+            dnf|yum) printf '    sudo dnf install -y docker && sudo systemctl enable --now docker\n' ;;
+            pacman) printf '    sudo pacman -S --needed docker && sudo systemctl enable --now docker\n' ;;
+            zypper) printf '    sudo zypper install -y docker && sudo systemctl enable --now docker\n' ;;
+            apk) printf '    sudo apk add docker && sudo rc-update add docker default && sudo service docker start\n' ;;
+            *) printf '    install Docker Engine: https://docs.docker.com/engine/install/\n' ;;
+          esac
+          printf '    log out and back in after adding your user to the docker group\n' ;;
+      esac
+      printf '    verify: docker info\n' ;;
+  esac
+}
+
 detect
 
 printf 'prerequisites (%s%s):\n\n' "$OS" "$( [ "$WSL" == 1 ] && echo ', WSL' )"
-for cmd in bash jq python3 openssl git skey node pi; do
-  have "$cmd" && status ok "$cmd" || status MISS "$cmd"
+for dep in "${ORDER[@]}"; do
+  if dep_present "$dep"; then status ok "$dep"; else status MISS "$dep"; fi
 done
-if [ "$DOCKER_BIN" == 1 ]; then status ok "docker"; elif [ "$LIMA_BIN" == 1 ]; then status ok "limactl (VM runtime)"; else status MISS "docker or limactl"; fi
-[ "$SANDBOX_OK" == 1 ] && status ok "sandbox pi (--remote)" || status opt "sandbox pi (only for --mode remote)"
+[ "$DOCKER_DOWN" == 1 ] && status warn "docker daemon not reachable"
+[ "$SANDBOX_OK" == 1 ] && status opt "sandbox pi (--remote, only for --mode remote)"
 have pnpm && status ok "pnpm (fast sync)" || status opt "pnpm (faster sync)"
-have limactl && status ok "limactl (VM runtime)" || status opt "limactl (VM runtime)"
 printf '\n'
 
 if [ "${#MISSING[@]}" -eq 0 ]; then
-  if [ "${DOCKER_DOWN:-0}" == 1 ]; then
+  if [ "$DOCKER_DOWN" == 1 ]; then
     printf 'warning: docker is installed but the daemon is not reachable\n'
     case "$OS" in
       macos) printf '  start Docker Desktop (or: colima start) before pisbx bootstrap\n\n' ;;
@@ -151,184 +257,85 @@ if [ "${#MISSING[@]}" -eq 0 ]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------- plan
-plan_dep() {
-  if [ "$OS" = windows ] && [ "$WSL" = 0 ]; then
-    PLAN+=("$1|")
-    return
-  fi
-  case "$1" in
-    jq|python3|openssl|git)
-      cmd="$(pm_cmd "$(pkg_names "$1")")"; PLAN+=("$1|$cmd") ;;
-    node)
-      cmd="$(pm_cmd "$(pkg_names node)")"; PLAN+=("node|$cmd") ;;
-    pi)
-      if have npm; then PLAN+=("pi|npm install -g @earendil-works/pi-coding-agent")
-      else PLAN+=("pi|"); fi ;;
-    skey)
-      if have cargo; then PLAN+=("skey|cargo install skey")
-      elif have go; then PLAN+=("skey|go install github.com/gwangjinkim/skey/skey-go@latest")
-      else PLAN+=("skey|"); fi ;;
-    docker)
-      case "$OS" in
-        macos)
-          if have brew; then PLAN+=("docker|brew install --cask docker")
-          else PLAN+=("docker|"); fi ;;
-        ubuntu|debian|pop|linuxmint)
-          PLAN+=("docker|sudo apt-get update && sudo apt-get install -y docker.io && sudo usermod -aG docker \"$USER\" && (sudo systemctl enable --now docker || sudo service docker start)") ;;
-        fedora|rhel|centos)
-          PLAN+=("docker|sudo dnf install -y docker && sudo systemctl enable --now docker") ;;
-        arch|manjaro)
-          PLAN+=("docker|sudo pacman -S --needed --noconfirm docker && sudo systemctl enable --now docker") ;;
-        alpine)
-          PLAN+=("docker|sudo apk add docker && sudo rc-update add docker default && sudo service docker start") ;;
-        opensuse*|suse)
-          PLAN+=("docker|sudo zypper install -y docker && sudo systemctl enable --now docker") ;;
-        *) PLAN+=("docker|") ;;
-      esac ;;
-  esac
-}
-
-for dep in ${MISSING[@]+"${MISSING[@]}"}; do plan_dep "$dep"; done
-
-# ---------------------------------------------------------------- manual guide
-manual_guide() {
-  local missing_list="$*"
-  printf '\nmanual setup for %s%s\n' "$OS" "$( [ "$WSL" == 1 ] && echo ' (WSL)' )"
-  printf 'missing: %s\n\n' "$missing_list"
-
-  printf 'Step 1 - base tools (jq, python3, openssl, git, node)\n'
-  case "$OS" in
-    macos)
-      if have brew; then
-        printf '  brew install jq python git node openssl\n'
-      else
-        printf '  install Homebrew first:\n'
-        printf '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"\n'
-        printf '  then re-run this installer\n'
-      fi ;;
-    windows)
-      printf '  recommend WSL2 + Ubuntu:\n'
-      printf '    wsl --install -d Ubuntu\n'
-      printf '  then inside Ubuntu run the Debian steps below\n' ;;
-    *)
-      case "$PM" in
-        apt-get) printf '  sudo apt-get update && sudo apt-get install -y jq python3 openssl git nodejs npm\n' ;;
-        dnf|yum) printf '  sudo dnf install -y jq python3 openssl git nodejs npm\n' ;;
-        pacman) printf '  sudo pacman -S --needed jq python openssl git nodejs npm\n' ;;
-        zypper) printf '  sudo zypper install -y jq python3 openssl git nodejs npm\n' ;;
-        apk) printf '  sudo apk add jq python3 openssl git nodejs npm\n' ;;
-        *) printf '  use your distribution package manager for: jq python3 openssl git nodejs npm\n' ;;
-      esac ;;
-  esac
-  printf '\n'
-
-  printf 'Step 2 - skey (OS keyring vault)\n'
-  if have cargo; then
-    printf '  cargo install skey\n'
-  elif have go; then
-    printf '  go install github.com/gwangjinkim/skey/skey-go@latest\n'
-  else
-    printf '  install Rust: curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh\n'
-    printf '  then:         cargo install skey\n'
-    printf '  or install Go: https://go.dev/dl/  then: go install github.com/gwangjinkim/skey/skey-go@latest\n'
-  fi
-  printf '\n'
-
-  printf 'Step 3 - pi\n'
-  printf '  npm install -g @earendil-works/pi-coding-agent\n'
-  printf '  sandbox build (only for --mode remote): export PISBX_SANDBOX_PI=/path/to/pi\n'
-  printf '  verify: pi --help 2>&1 | grep -- "--remote <url>"\n'
-  printf '\n'
-
-  printf 'Step 4 - container runtime\n'
-  case "$OS" in
-    macos)
-      printf '  option A: Docker Desktop  https://docs.docker.com/desktop/install/mac-install/\n'
-      printf '  option B: brew install colima docker && colima start\n'
-      printf '  option C: brew install lima   (VM runtime: --runtime lima)\n'
-      printf '  start the engine before running pisbx\n' ;;
-    windows)
-      printf '  install Docker Desktop with the WSL2 backend:\n'
-      printf '    https://docs.docker.com/desktop/install/windows-install/\n'
-      printf '  run pisbx inside WSL2, not Git Bash\n' ;;
-    *)
-      case "$PM" in
-        apt-get) printf '  sudo apt-get install -y docker.io\n  sudo usermod -aG docker "$USER"\n  sudo systemctl enable --now docker   # or: sudo service docker start\n' ;;
-        dnf|yum) printf '  sudo dnf install -y docker && sudo systemctl enable --now docker\n' ;;
-        pacman) printf '  sudo pacman -S --needed docker && sudo systemctl enable --now docker\n' ;;
-        zypper) printf '  sudo zypper install -y docker && sudo systemctl enable --now docker\n' ;;
-        apk) printf '  sudo apk add docker && sudo rc-update add docker default && sudo service docker start\n' ;;
-        *) printf '  install Docker Engine: https://docs.docker.com/engine/install/\n' ;;
-      esac
-      printf '  log out and back in after adding your user to the docker group\n' ;;
-  esac
-  printf '\n'
-
-  printf 'Step 5 - verify\n'
-  printf '  pisbx doctor\n'
-  printf '  pisbx bootstrap\n'
-  printf '  pisbx init\n'
-  printf '\n'
-}
-
-# ---------------------------------------------------------------- permission
 if [ "$check_only" == 1 ]; then
   printf 'missing prerequisites:\n\n'
-  for entry in ${PLAN[@]+"${PLAN[@]}"}; do
-    label="${entry%%|*}"; cmd="${entry#*|}"
-    if [ -n "$cmd" ]; then printf '  %-8s %s\n' "$label" "$cmd"; else printf '  %-8s (manual)\n' "$label"; fi
+  for dep in "${ORDER[@]}"; do
+    dep_present "$dep" && continue
+    printf '%s\n' "$(dep_title "$dep")"
+    dep_hint "$dep"
+    printf '\n'
   done
-  manual_guide "${MISSING[*]}"
   exit 1
 fi
 
+# ---------------------------------------------------------------- one by one
 printf 'missing prerequisites:\n\n'
-for entry in ${PLAN[@]+"${PLAN[@]}"}; do
-  label="${entry%%|*}"; cmd="${entry#*|}"
-  if [ -n "$cmd" ]; then printf '  %-8s %s\n' "$label" "$cmd"; else printf '  %-8s (manual)\n' "$label"; fi
+for dep in "${ORDER[@]}"; do
+  dep_present "$dep" && continue
+  printf '  %-28s %s\n' "$(dep_title "$dep")" "$(dep_cmd "$dep" || true)"
 done
 
 answer="n"
 if [ -t 0 ] && [ -t 1 ]; then
-  printf '\ninstall them now? [y/N] '
+  printf '\ninstall them one by one now? [y/N] '
   read -r answer
 fi
 
 if [[ "$answer" =~ ^[Yy]$ ]]; then
-  failed=0
-  for entry in ${PLAN[@]+"${PLAN[@]}"}; do
-    label="${entry%%|*}"; cmd="${entry#*|}"
+  i=0
+  total=0
+  for dep in "${ORDER[@]}"; do dep_present "$dep" || total=$((total+1)); done
+  for dep in "${ORDER[@]}"; do
+    dep_present "$dep" && continue
+    i=$((i+1))
+    printf '\n[%d/%d] %s\n' "$i" "$total" "$(dep_title "$dep")"
+    cmd="$(dep_cmd "$dep" || true)"
     if [ -z "$cmd" ]; then
-      printf '\nno automatic command for %s\n' "$label"
-      failed=1
+      printf '  no automatic installer for this platform.\n'
+      dep_hint "$dep"
       continue
     fi
-    printf '\n> %s\n' "$cmd"
-    if ! bash -c "$cmd"; then
-      printf 'x failed: %s\n' "$label"
-      failed=1
+    printf '  > %s\n' "$cmd"
+    if bash -c "$cmd" && dep_present "$dep"; then
+      printf '  installed\n'
+    else
+      printf '  automatic install did not work.\n'
+      dep_hint "$dep"
     fi
   done
+  printf '\n'
   detect
   if [ "${#MISSING[@]}" -gt 0 ]; then
-    manual_guide "${MISSING[*]}"
+    printf 'still missing:\n\n'
+    for dep in "${ORDER[@]}"; do
+      dep_present "$dep" && continue
+      printf '%s\n' "$(dep_title "$dep")"
+      dep_hint "$dep"
+      printf '\n'
+    done
     exit 1
   fi
-  printf '\nall prerequisites are installed.\n\n'
+  if [ "$DOCKER_DOWN" == 1 ]; then
+    printf 'warning: docker is installed but the daemon is not reachable\n'
+    case "$OS" in
+      macos) printf '  start Docker Desktop (or: colima start) before pisbx bootstrap\n\n' ;;
+      *) printf '  start it with: sudo systemctl start docker\n\n' ;;
+    esac
+  fi
+  printf 'all prerequisites are installed.\n\n'
   if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
     printf 'add this to your shell profile:\n  export PATH="%s:$PATH"\n\n' "$bin_dir"
-  fi
-  if [ "${DOCKER_DOWN:-0}" == 1 ]; then
-    printf 'warning: the docker daemon is not reachable yet\n'
-    case "$OS" in
-      macos) printf '  start Docker Desktop (or: colima start) before pisbx bootstrap\n' ;;
-      *) printf '  start it with: sudo systemctl start docker\n' ;;
-    esac
   fi
   printf 'next: pisbx bootstrap && pisbx init && pisbx doctor\n'
   exit 0
 fi
 
-manual_guide "${MISSING[*]}"
+printf '\nskipped. do these in order:\n\n'
+for dep in "${ORDER[@]}"; do
+  dep_present "$dep" && continue
+  printf '%s\n' "$(dep_title "$dep")"
+  dep_hint "$dep"
+  printf '\n'
+done
+printf 'then run: pisbx doctor\n'
 exit 1
