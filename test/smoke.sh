@@ -40,5 +40,6 @@ for inv in "--help" "-h" "help"; do
   check "help via $inv" bash -c "'$bin' $inv | grep -q '^COMMANDS'"
 done
 check "version" bash -c "'$bin' version | grep -Eq '^[0-9]+\.'"
+check "help documents native mode" bash -c "'$bin' help | grep -q 'native'"
 
 exit "$fail"
