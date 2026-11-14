@@ -171,7 +171,23 @@ environment variable to forget and no wrong-key mistake to make.
 
 ---
 
-## 5. Sessions in an existing folder
+## 5. Choose a mode (when the dashboard matters)
+
+| Mode | Sandbox | Config/extensions | Use when |
+|---|---|---|---|
+| `remote` (default) | tools in container, key stays on host | preserved, but extensions built for `@earendil-works` cannot load in the sandbox build | you want the key out of the sandbox |
+| `container` | whole `pi` in container | fresh home volume; extensions live there | portability / CI |
+| `native` | none | **exact**, same `pi` and same config | the dashboard and extensions must match |
+
+```bash
+pisbx run --model provider/model              # remote
+pisbx run --model provider/model --mode native
+```
+
+`native` still takes the key from the keyring through an ephemeral `auth.json`, so
+it is better than `export`, but there is no filesystem sandbox.
+
+## 6. Sessions in an existing folder
 
 Session files live under `~/.pi/agent/sessions/--<encoded-cwd>--/`. If that folder
 already has sessions, the first run asks:
@@ -205,7 +221,7 @@ stale session is a great way to confuse the agent. One prompt removes the ambigu
 
 ---
 
-## 6. Verify the isolation
+## 7. Verify the isolation
 
 From inside the agent's shell:
 
@@ -220,7 +236,7 @@ env | grep -c API_KEY        # 0 in remote mode
 
 ---
 
-## 7. Update
+## 8. Update
 
 ```bash
 pisbx update --check          # is there a newer commit?

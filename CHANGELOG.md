@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1
+
+- **Config preservation:** the ephemeral agent directory now symlinks the real
+  `settings.json`, `extensions/`, `npm/`, `statusline/`, themes, and sessions, so
+  extensions and UI settings survive. Only `auth.json` is replaced.
+- **New `--mode native`:** runs your installed `pi` with your full config and no
+  sandbox. The key still comes from the keyring via an ephemeral `auth.json`.
+- **Fidelity warning:** remote mode warns when `settings.json` declares packages,
+  because the sandbox `pi` build cannot load extensions that import
+  `@earendil-works/*`.
+- `PISBX_PI` selects the binary used by native mode.
+
 ## 0.2.0
 
 - **Sessions:** when the working folder already has sessions, `pisbx run` asks

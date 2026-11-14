@@ -364,13 +364,31 @@ install is the most common source of confusing failures.
 |---|---|---|
 | `--model P/M` | required | the prefix selects the credential; no key names to remember |
 | `--runtime docker\|lima` | `docker` | docker is fast and cross-platform; lima gives a real VM kernel boundary |
-| `--mode remote\|container` | `auto` | `remote` keeps the key out of the sandbox; `container` is portable and CI-friendly |
+| `--mode remote\|container\|native` | `auto` | `remote` keeps the key out of the sandbox; `container` is portable and CI-friendly; `native` uses your exact `pi` and config, without a sandbox |
 | `--dry-run` | off | shows the plan without reading a secret or starting anything |
 | `--force` | off | allows mounting `$HOME` or `/` as the workspace (dangerous) |
 | `--session-mode ask\|continue\|new` | `ask` | when the folder already has sessions, ask; `continue` passes `-c`; `new` starts fresh |
 
 `auto` picks `remote` when the installed `pi` supports `--remote`, otherwise
 `container`.
+
+### Extension fidelity
+
+`pisbx` preserves your agent directory: in `remote` and `native` modes it builds an
+ephemeral directory with symlinks to `settings.json`, `extensions/`, `npm/`,
+`statusline/`, themes, and so on, and adds only its own ephemeral `auth.json`.
+
+That said, `remote` mode must run a `pi` build that supports `--remote` (currently
+the `@fleetagent` build). Extensions written against `@earendil-works/pi-tui` cannot
+load there, so the dashboard can look different. When that matters:
+
+```bash
+pisbx run --model provider/model --mode native
+```
+
+`native` runs your installed `pi` with your full config and no sandbox. The key
+still comes from the keyring via an ephemeral `auth.json`, but tools execute on the
+host.
 
 ### Sessions in an existing folder
 

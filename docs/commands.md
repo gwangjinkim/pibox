@@ -99,7 +99,7 @@ Steps:
 |---|---|---|
 | `--model P/M` | required | the prefix `P` selects the credential |
 | `--runtime docker\|lima` | `docker` | where tools execute |
-| `--mode auto\|remote\|container` | `auto` | remote = orchestrate on host, tools in container |
+| `--mode auto\|remote\|container\|native` | `auto` | remote = orchestrate on host, tools in container; native = your own `pi`, no sandbox |
 | `--session-mode ask\|continue\|new` | `ask` | what to do when the folder already has sessions |
 | `--dry-run` | off | print the plan; do not read a secret or start anything |
 | `--force` | off | allow mounting `$HOME` or `/` as the workspace |
@@ -128,6 +128,16 @@ If the folder has sessions and you did not pass a session flag, `pisbx` asks:
 The prompt is suppressed automatically for non-TTY input and when any of
 `-c`, `--continue`, `--session`, `--resume`, `--fork`, `--no-session`, or
 `--session-dir` is already present.
+
+### Extension fidelity
+
+The agent directory is preserved in `remote` and `native` modes: settings,
+extensions, packages, themes, statusline, and sessions are symlinked into an
+ephemeral directory that carries only an ephemeral `auth.json`.
+
+`remote` still needs a `pi` build with `--remote`. Extensions that import
+`@earendil-works/pi-tui` cannot load under the `@fleetagent` sandbox build, so the
+TUI can differ. Use `--mode native` when you need the exact setup.
 
 ### Passthrough
 
@@ -170,6 +180,7 @@ limactl start --name=pisbx --tty=false template:docker-rootful
 | `PISBX_IMAGE` | sandbox image tag (default `pisbx-sandbox`) |
 | `PISBX_IMAGE_FULL` | whole-container image tag (default `pisbx-full`) |
 | `PISBX_SANDBOX_PI` | host `pi` binary that supports `--remote` |
+| `PISBX_PI` | `pi` binary used by `--mode native` (default: `pi`) |
 | `PISBX_LIMA_NAME` | Lima instance name (default `pisbx`) |
 | `PISBX_SESSION_MODE` | default for `--session-mode` |
 | `PISBX_NO_EXTENSIONS=1` | pass `--no-extensions` in remote mode |
