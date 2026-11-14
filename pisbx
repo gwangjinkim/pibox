@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-PISBX_VERSION="0.3.2"
+PISBX_VERSION="0.4.0"
 CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -295,6 +295,128 @@ decide_session() {
     q|Q) SESSION_CHOICE=quit ;;
     n|N|new) SESSION_CHOICE=new ;;
     *) SESSION_CHOICE=continue ;;
+  esac
+}
+
+
+# ---------- git workspace ----------
+workspace_src() { printf '%s' "${WORKSPACE:-$PWD}"; }
+
+workspace_mode_from_manifest() {
+  local file="$1/pisbx.toml"
+  [[ -f "$file" ]] || return 0
+  python3 - "$file" <<'PYEOF'
+import re, sys
+text = open(sys.argv[1]).read()
+m = re.search(r'^\[workspace\]\s*$(.*?)(?=^\[|\Z)', text, re.M | re.S)
+if m:
+    mm = re.search(r'^\s*mode\s*=\s*"([^"]+)"', m.group(1), re.M)
+    if mm:
+        print(mm.group(1))
+PYEOF
+}
+
+GIT_WORKDIR=""; GIT_SESSION=""; GIT_BRANCH=""; GIT_BASE=""; GIT_ROOT=""
+
+prepare_git_worktree() {
+  local root base f
+  root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -n "$root" ]] || die "--workspace git requires a git repository"
+  if [[ "$root" != "$PWD" ]]; then
+    warn "using repository root: $root"
+  fi
+  GIT_ROOT="$root"
+  GIT_SESSION="$(date +%Y%m%d-%H%M%S)-$RANDOM"
+  GIT_BRANCH="pisbx/$GIT_SESSION"
+  mkdir -p "$root/.pisbx/work"
+  GIT_WORKDIR="$root/.pisbx/work/$GIT_SESSION"
+
+  if ! git -C "$root" check-ignore -q .pisbx 2>/dev/null; then
+    warn ".pisbx/ is not in .gitignore; add it so the worktree is not committed"
+  fi
+
+  base="$(git -C "$root" stash create 2>/dev/null || true)"
+  [[ -n "$base" ]] || base="$(git -C "$root" rev-parse HEAD 2>/dev/null)" \
+    || die "cannot resolve HEAD; make an initial commit first"
+
+  git -C "$root" worktree add --detach "$GIT_WORKDIR" "$base" >&2 \
+    || die "git worktree add failed"
+
+  # untracked but not ignored; .env in .gitignore is therefore excluded
+  git -C "$root" ls-files -o --exclude-standard -z | while IFS= read -r -d '' f; do
+    mkdir -p "$GIT_WORKDIR/$(dirname "$f")"
+    cp -p "$root/$f" "$GIT_WORKDIR/$f" 2>/dev/null || true
+  done
+
+  # baseline commit so our copied untracked files are not mistaken for agent edits
+  if [[ -n "$(git -C "$GIT_WORKDIR" status --porcelain 2>/dev/null)" ]]; then
+    git -C "$GIT_WORKDIR" add -A >/dev/null 2>&1 || true
+    git -C "$GIT_WORKDIR" -c user.name=pisbx -c user.email=pisbx@localhost \
+      commit -m "pisbx snapshot $GIT_SESSION" >/dev/null 2>&1 || true
+  fi
+  GIT_BASE="$(git -C "$GIT_WORKDIR" rev-parse HEAD)"
+
+  WORKSPACE="$GIT_WORKDIR"
+  info "git workspace: $GIT_WORKDIR"
+  dim "base: ${GIT_BASE:0:8}; ignored files (.env) are not copied"
+}
+
+GIT_FINALIZED=0
+finalize_git_workspace() {
+  [[ -n "$GIT_WORKDIR" ]] || return 0
+  [[ "$GIT_FINALIZED" == 1 ]] && return 0
+  GIT_FINALIZED=1
+  if [[ -z "$(git -C "$GIT_WORKDIR" status --porcelain 2>/dev/null)" ]]; then
+    info "no changes in the git workspace"
+    dim "kept for inspection: $GIT_WORKDIR"
+    return 0
+  fi
+  git -C "$GIT_WORKDIR" checkout -b "$GIT_BRANCH" >/dev/null 2>&1 || true
+  git -C "$GIT_WORKDIR" add -A >/dev/null 2>&1 || true
+  git -C "$GIT_WORKDIR" -c user.name=pisbx -c user.email=pisbx@localhost \
+    commit -m "pisbx session $GIT_SESSION" >/dev/null 2>&1 || true
+  info "changes committed to $GIT_BRANCH"
+  dim "review: git diff $GIT_BASE..$GIT_BRANCH"
+  dim "merge:  git merge $GIT_BRANCH"
+  dim "remove: git worktree remove $GIT_WORKDIR"
+}
+
+PISBX_CLEAN_CONTAINER=""; PISBX_CLEAN_DIR=""
+on_exit() {
+  [[ -n "${PISBX_CLEAN_CONTAINER:-}" ]] && docker rm -f "$PISBX_CLEAN_CONTAINER" >/dev/null 2>&1 || true
+  [[ -n "${PISBX_CLEAN_DIR:-}" ]] && rm -rf "$PISBX_CLEAN_DIR" || true
+  finalize_git_workspace || true
+}
+
+cmd_work() {
+  local action="${1:-list}" root
+  root="$(project_root || true)"; [[ -n "$root" ]] || root="$PWD"
+  local dir="$root/.pisbx/work"
+  case "$action" in
+    list)
+      [[ -d "$dir" ]] || { info "no git workspaces"; return 0; }
+      local d n
+      for d in "$dir"/*; do
+        [[ -d "$d" ]] || continue
+        n="$(git -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+        printf '%s  changes=%s  %s\n' "$(basename "$d")" "${n:-?}" "$d"
+      done
+      ;;
+    clean)
+      [[ -d "$dir" ]] || { info "no git workspaces"; return 0; }
+      local d
+      for d in "$dir"/*; do
+        [[ -d "$d" ]] || continue
+        if [[ -z "$(git -C "$d" status --porcelain 2>/dev/null)" ]]; then
+          git -C "$root" worktree remove "$d" >/dev/null 2>&1 || rm -rf "$d"
+          dim "removed $d"
+        else
+          warn "keeping $d (uncommitted changes)"
+        fi
+      done
+      git -C "$root" worktree prune >/dev/null 2>&1 || true
+      ;;
+    *) die "work: use list|clean" ;;
   esac
 }
 
@@ -678,6 +800,7 @@ cmd_launch() {
   [[ "${PISBX_NO_EXTENSIONS:-0}" == 1 ]] && extra+=(--no-extensions)
 
   if [[ "$native" == 1 ]]; then
+    [[ -n "${PISBX_CWD:-}" ]] && cd "$PISBX_CWD"
     PI_CODING_AGENT_DIR="$dir" "${PISBX_PI:-pi}" ${extra[@]+"${extra[@]}"} \
       --model "$model" ${rest[@]+"${rest[@]}"}
   else
@@ -696,7 +819,7 @@ cmd_run() {
       die "pisbx runs pi only; use agentbox for ${1}" ;;
   esac
   local runtime="" model="" mode="" force=0 dry=0
-  local session_mode="${PISBX_SESSION_MODE:-ask}"
+  local ws_mode="" session_mode="${PISBX_SESSION_MODE:-ask}"
   local -a passthru=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -705,6 +828,7 @@ cmd_run() {
       --mode) mode="$2"; shift 2 ;;
       --force) force=1; shift ;;
       --session-mode) session_mode="$2"; shift 2 ;;
+      --workspace) ws_mode="$2"; shift 2 ;;
       --dry-run) dry=1; shift ;;
       *) passthru+=("$1"); shift ;;
     esac
@@ -742,7 +866,7 @@ cmd_run() {
     *) die "--runtime must be docker or lima" ;;
   esac
 
-  guard_workspace "$PWD" "$force"
+  guard_workspace "$(workspace_src)" "$force"
 
   local penv=""
   if [[ "$dry" != 1 ]]; then
@@ -753,6 +877,23 @@ cmd_run() {
     info "using project environment $penv"
   fi
 
+  if [[ -z "$ws_mode" ]]; then
+    ws_mode="$(workspace_mode_from_manifest "$(project_root || echo "$PWD")")"
+  fi
+  ws_mode="${ws_mode:-mount}"
+  case "$ws_mode" in
+    mount) : ;;
+    git)
+      if [[ "$dry" == 1 ]]; then
+        info "dry run: would create a git worktree under .pisbx/work/"
+      else
+        prepare_git_worktree
+        trap on_exit EXIT INT TERM
+      fi
+      ;;
+    *) die "--workspace must be mount or git" ;;
+  esac
+
   decide_session "$session_mode" ${passthru[@]+"${passthru[@]}"}
   case "$SESSION_CHOICE" in
     quit) exit 0 ;;
@@ -762,7 +903,7 @@ cmd_run() {
 
   if [[ "$dry" == 1 ]]; then
     info "dry run; no container started, no secret read"
-    dim "would start: $runtime/$mode in $PWD"
+    dim "would start: $runtime/$mode in $(workspace_src)"
     dim "session: $SESSION_CHOICE; pi args: ${passthru[*]:-<none>}"
     return 0
   fi
@@ -774,7 +915,7 @@ cmd_run() {
       dim "would run: ${PISBX_PI:-pi} --model $model ${passthru[*]:-}"
       return 0
     fi
-    skey run --no-redact "$provider" "$variant" --env PISBX_SECRET -y -- \
+    PISBX_CWD="$(workspace_src)" skey run --no-redact "$provider" "$variant" --env PISBX_SECRET -y -- \
       "$0" _launch --provider "$provider" --model "$model" --native \
       ${passthru[@]+"${passthru[@]}"}
     exit $?
@@ -788,7 +929,7 @@ cmd_run() {
     info "running pi inside a container in VM '$LIMA_NAME'"
     warn "note: in VM mode the credential is passed to the guest; prefer --runtime docker for tighter key isolation"
     limactl shell "$LIMA_NAME" -- docker run --rm ${tty[@]+"${tty[@]}"} \
-      -v "$PWD:/workspace" -v pisbx-home:/home/node/.pi \
+      -v "$(workspace_src):/workspace" -v pisbx-home:/home/node/.pi \
       "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"}
     return $?
   fi
@@ -807,11 +948,12 @@ cmd_run() {
     info "starting sandbox daemon on 127.0.0.1:$port"
     docker run -d --rm --name "$name" \
       -e PI_DAEMON_TOKEN="$token" \
-      -v "$PWD:/workspace" \
+      -v "$(workspace_src):/workspace" \
       -p "127.0.0.1:$port:8787" \
       "$IMAGE" >/dev/null
 
-    trap "docker rm -f '$name' >/dev/null 2>&1 || true; rm -rf '$dir'" EXIT INT TERM
+    PISBX_CLEAN_CONTAINER="$name"; PISBX_CLEAN_DIR="$dir"
+    trap on_exit EXIT INT TERM
     wait_daemon "$name" || die "sandbox daemon failed to start"
 
     if [[ -f "$AGENT_DIR/settings.json" ]] && jq -e '.packages | length > 0' "$AGENT_DIR/settings.json" >/dev/null 2>&1; then
@@ -826,6 +968,8 @@ cmd_run() {
     local rc=$?
     docker rm -f "$name" >/dev/null 2>&1 || true
     rm -rf "$dir"
+    PISBX_CLEAN_CONTAINER=""; PISBX_CLEAN_DIR=""
+    finalize_git_workspace
     trap - EXIT INT TERM
     return $rc
   fi
@@ -842,7 +986,7 @@ cmd_run() {
     docker run --rm ${tty[@]+"${tty[@]}"} --init \
       --cap-drop=ALL --security-opt=no-new-privileges \
       -e "$envvar" \
-      -v "$PWD:/workspace" \
+      -v "$(workspace_src):/workspace" \
       -v pisbx-home:/home/node/.pi \
       "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"}
 }
@@ -1291,6 +1435,14 @@ COMMANDS
   env status|init
       Inspect or create the project environment.
 
+  work list|clean
+      List or remove git workspaces under .pisbx/work/.
+
+  run also accepts --workspace mount|git. git mode creates a worktree
+  from a snapshot of your dirty tree, copies untracked non-ignored
+  files, excludes .gitignored files such as .env, and commits the
+  result to pisbx/<session> on exit.
+
   version
       Print the version.
 
@@ -1338,6 +1490,7 @@ main() {
     env) cmd_env "$@" ;;
     run) cmd_run "$@" ;;
     vm) cmd_vm "$@" ;;
+    work) cmd_work "$@" ;;
     _launch) cmd_launch "$@" ;;
     version|--version|-v) echo "$PISBX_VERSION" ;;
     help|-h|--help) cmd_help ;;

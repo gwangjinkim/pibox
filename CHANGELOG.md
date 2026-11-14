@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- **`--workspace git`:** isolates the agent in a git worktree built from a
+  snapshot of the dirty tree, copies untracked non-ignored files, excludes
+  `.gitignore` entries such as `.env`, and commits results to `pisbx/<session>`
+  on exit. The live tree is never modified.
+- **`pisbx work list|clean`** manages worktrees under `.pisbx/work/`; they are
+  kept after exit, including crashes.
+- `[workspace] mode = "mount"|"git"` in `pisbx.toml`.
+- `mount` remains the default.
+
 ## 0.3.2
 
 - **`migrate` adopts the whole setup:** every extension with its exact version,

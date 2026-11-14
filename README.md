@@ -368,6 +368,7 @@ install is the most common source of confusing failures.
 | `--dry-run` | off | shows the plan without reading a secret or starting anything |
 | `--force` | off | allows mounting `$HOME` or `/` as the workspace (dangerous) |
 | `--session-mode ask\|continue\|new` | `ask` | when the folder already has sessions, ask; `continue` passes `-c`; `new` starts fresh |
+| `--workspace mount\|git` | `mount` | `mount` edits your live tree; `git` works in a worktree and commits to `pisbx/<session>` |
 
 `auto` picks `remote` when the installed `pi` supports `--remote`, otherwise
 `container`.
@@ -403,6 +404,28 @@ pisbx run --model provider/model --mode native
 `native` runs your installed `pi` with your full config and no sandbox. The key
 still comes from the keyring via an ephemeral `auth.json`, but tools execute on the
 host.
+
+### Workspaces: mount or git
+
+By default the project is bind-mounted, so edits are immediately permanent.
+
+For hermetic work, `--workspace git` creates a worktree from a snapshot of your
+dirty tree, copies **untracked non-ignored** files, and therefore never copies
+`.env` or anything else in `.gitignore`. On exit it commits to
+`pisbx/<session>`; your live tree is untouched.
+
+```bash
+pisbx run pi --workspace git --model opencode-go/muse-spark-1.3-contributor
+```
+
+Or persist the choice:
+
+```toml
+[workspace]
+mode = "git"
+```
+
+See [docs/environment.md](docs/environment.md#git-workspace-mode).
 
 ### Sessions in an existing folder
 

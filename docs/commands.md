@@ -135,6 +135,7 @@ Steps:
 | `--runtime docker\|lima` | `docker` | where tools execute |
 | `--mode auto\|remote\|container\|native` | `auto` | remote = orchestrate on host, tools in container; native = your own `pi`, no sandbox |
 | `--session-mode ask\|continue\|new` | `ask` | what to do when the folder already has sessions |
+| `--workspace mount\|git` | `mount` | live bind mount, or an isolated git worktree |
 | `--dry-run` | off | print the plan; do not read a secret or start anything |
 | `--force` | off | allow mounting `$HOME` or `/` as the workspace |
 
@@ -183,6 +184,29 @@ pisbx run --model anthropic/claude-sonnet-4 -- -c
 ```
 
 ---
+
+## `pisbx work list|clean`
+
+- `list` shows worktrees under `.pisbx/work/` and their change count
+- `clean` removes worktrees with no changes; worktrees with uncommitted changes are
+  kept
+
+## Git workspace mode
+
+`--workspace git` (or `[workspace] mode = "git"` in `pisbx.toml`):
+
+1. `git stash create` snapshots tracked dirty changes (no stash entry is added)
+2. `git worktree add --detach .pisbx/work/<session> <snapshot>`
+3. untracked **non-ignored** files are copied; `.gitignore` excludes `.env`
+4. a baseline commit is made so copied files are not reported as agent edits
+5. on exit, changes are committed to branch `pisbx/<session>`
+
+The live tree is never modified. Review with
+`git diff <base>..pisbx/<session>`, merge with `git merge`, remove with
+`git worktree remove`.
+
+Requirements: a git repository with at least one commit. Add `.pisbx/` to
+`.gitignore`.
 
 ## `pisbx vm status|start|stop|delete|shell`
 

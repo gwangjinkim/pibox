@@ -72,6 +72,67 @@ The environment is bind-mounted into the container or VM, so boxed sessions
 normally install nothing. For an extension added *inside* a box, mount the store
 too; `sync`/`add` can then link from it instead of hitting the network.
 
+## Git workspace mode
+
+`mount` (the default) edits your live tree. `git` isolates the agent in a
+worktree:
+
+```bash
+pisbx run pi --workspace git --model provider/model
+```
+
+```
+project/
+  .pisbx/
+    work/
+      20261114-183939-4161/    # worktree, kept after exit
+```
+
+What happens:
+
+1. **Snapshot** — `git stash create` captures staged and unstaged tracked
+   changes without adding a stash entry.
+2. **Worktree** — `git worktree add --detach .pisbx/work/<session> <snapshot>`.
+3. **Untracked files** — copied only if `git ls-files -o --exclude-standard`
+   lists them. `.env` and everything else in `.gitignore` is never copied.
+4. **Baseline** — a `pisbx snapshot` commit is created so the copied files are
+   not mistaken for agent edits.
+5. **Run** — tools operate in the worktree.
+6. **Commit** — on exit, changes are committed to `pisbx/<session>`.
+
+The live tree is untouched. Because the worktree shares the object database, the
+branch is immediately available in the real repository:
+
+```bash
+git diff <base>..pisbx/<session>      # agent-only changes
+git merge pisbx/<session>
+git worktree remove .pisbx/work/<session>
+```
+
+The worktree is kept on exit (including after a crash), so nothing is lost.
+`pisbx work list` shows them; `pisbx work clean` removes clean ones.
+
+Required `.gitignore` entries:
+
+```gitignore
+.pisbx/
+.env
+.env.*
+```
+
+Caveats:
+
+- the project must be a git repository with at least one commit
+- a stash snapshot is a commit object; history shows
+  `base → stash → pisbx snapshot → pisbx session`
+- only **ignored** secrets are hidden. A `.env` that is not in `.gitignore` *is*
+  copied
+- native mode changes directory into the worktree; remote mode keeps the host
+  orchestrator in the project root and routes tools to the worktree
+
+For projects without git, use `mount` and mask secret files, or initialise a
+repository.
+
 ## Migrating a global setup
 
 ```bash
