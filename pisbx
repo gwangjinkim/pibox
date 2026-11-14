@@ -191,6 +191,77 @@ EOF
   }
 }
 
+
+# ---------- sessions ----------
+session_base() {
+  printf '%s' "${PI_SESSION_DIR:-$AGENT_DIR/sessions}"
+}
+session_dir() {
+  local base p
+  base="$(session_base)"
+  p="${PWD#/}"
+  p="${p//\//-}"
+  printf '%s/--%s--' "$base" "$p"
+}
+session_files() {
+  local dir; dir="$(session_dir)"
+  [[ -d "$dir" ]] || return 0
+  find "$dir" -maxdepth 1 -type f -name '*.jsonl' 2>/dev/null
+}
+session_count() {
+  local n
+  n="$(session_files | wc -l | tr -d ' ')"
+  printf '%s' "${n:-0}"
+}
+latest_session() {
+  session_files | while IFS= read -r f; do
+    printf '%s\t%s\n' "$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null || echo 0)" "$f"
+  done | sort -rn | head -n1 | cut -f2-
+}
+has_session_flag() {
+  local a
+  for a in "$@"; do
+    case "$a" in
+      -c|--continue|-r|--resume|--resume=*|--session|--session=*|--fork|--fork=*|--no-session|--session-dir|--session-dir=*) return 0 ;;
+    esac
+  done
+  return 1
+}
+# Sets SESSION_CHOICE to continue | new | quit.
+decide_session() {
+  SESSION_CHOICE="${1:-ask}"
+  [[ "$SESSION_CHOICE" == ask ]] || return 0
+  if has_session_flag "${@:2}"; then
+    SESSION_CHOICE=explicit
+    return 0
+  fi
+  local n; n="$(session_count)"
+  if [[ "$n" == 0 ]]; then
+    SESSION_CHOICE=new
+    return 0
+  fi
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    SESSION_CHOICE=new
+    return 0
+  fi
+  local latest name when size
+  latest="$(latest_session)"
+  name="$(basename "${latest:-session}")"
+  when="$(printf '%s' "$name" | cut -c1-16 | tr 'T' ' ')"
+  size="$(du -h "${latest:-/dev/null}" 2>/dev/null | cut -f1)"
+  printf '\n' >&2
+  info "found $n previous session(s) for this folder"
+  dim "latest: $when  ($size)  $name"
+  printf '  [Enter] continue last   [n] new session   [q] quit: ' >&2
+  local reply
+  read -r reply || reply=""
+  case "$reply" in
+    q|Q) SESSION_CHOICE=quit ;;
+    n|N|new) SESSION_CHOICE=new ;;
+    *) SESSION_CHOICE=continue ;;
+  esac
+}
+
 # ---------- workspace guard ----------
 guard_workspace() {
   local target="$1" force="${2:-0}"
@@ -497,6 +568,7 @@ cmd_launch() {
 
 cmd_run() {
   local runtime="" model="" mode="" force=0 dry=0
+  local session_mode="${PISBX_SESSION_MODE:-ask}"
   local -a passthru=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -504,6 +576,7 @@ cmd_run() {
       --model) model="$2"; shift 2 ;;
       --mode) mode="$2"; shift 2 ;;
       --force) force=1; shift ;;
+      --session-mode) session_mode="$2"; shift 2 ;;
       --dry-run) dry=1; shift ;;
       *) passthru+=("$1"); shift ;;
     esac
@@ -539,9 +612,17 @@ cmd_run() {
 
   guard_workspace "$PWD" "$force"
 
+  decide_session "$session_mode" ${passthru[@]+"${passthru[@]}"}
+  case "$SESSION_CHOICE" in
+    quit) exit 0 ;;
+    continue) passthru=(-c ${passthru[@]+"${passthru[@]}"}); info "continuing the most recent session" ;;
+    new) [[ "$session_mode" == ask ]] && info "starting a new session" ;;
+  esac
+
   if [[ "$dry" == 1 ]]; then
     info "dry run; no container started, no secret read"
     dim "would start: $runtime/$mode in $PWD"
+    dim "session: $SESSION_CHOICE; pi args: ${passthru[*]:-<none>}"
     return 0
   fi
 
@@ -594,6 +675,7 @@ cmd_run() {
   # container mode: whole pi process inside the container
   docker_ok || die "docker unavailable"
   ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile"
+  local sbase; sbase="$(session_base)"; mkdir -p "$sbase"
   local -a tty=()
   have_tty && tty=(-it)
   info "running the whole pi process in the container"
@@ -652,6 +734,9 @@ pisbx $PISBX_VERSION - pi with keys in the OS keyring, tools in a container or V
       --runtime docker|lima     where tools execute (default: docker)
       --mode remote|container   remote = orchestrate on host, tools in
                                 container (default: auto)
+      --session-mode ask|continue|new
+                                ask (default) prompts when the folder already
+                                has sessions; continue passes -c; new starts fresh
       --force                   allow mounting \$HOME or / as workspace
       --dry-run                 show the plan without starting anything
 

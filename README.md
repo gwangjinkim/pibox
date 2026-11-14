@@ -376,9 +376,32 @@ Why it exists: most security failures are configuration drift, not exploits.
 | `--mode remote\|container` | `auto` | `remote` keeps the key out of the sandbox; `container` is portable and CI-friendly |
 | `--dry-run` | off | shows the plan without reading a secret or starting anything |
 | `--force` | off | allows mounting `$HOME` or `/` as the workspace (dangerous) |
+| `--session-mode ask\|continue\|new` | `ask` | when the folder already has sessions, ask; `continue` passes `-c`; `new` starts fresh |
 
 `auto` picks `remote` when the installed `pi` supports `--remote`, otherwise
 `container`.
+
+### Sessions in an existing folder
+
+Session files live under `~/.pi/agent/sessions/--<encoded-cwd>--/`. If that folder
+already has sessions, `pisbx` asks once:
+
+```
+found 2 previous session(s) for this folder
+  latest: 2026-11-14 08:11  (11K)  2026-11-14T08-11-54-970Z_....jsonl
+  [Enter] continue last   [n] new session   [q] quit:
+```
+
+- **Enter** continues the most recent session (`pi -c`)
+- **n** starts a clean session
+- **q** exits without starting anything
+
+Non-interactive runs, and runs that already pass a session flag (`-c`, `--session`,
+`--resume`, etc.) are left alone. Override the prompt with
+`--session-mode continue|new` or `PISBX_SESSION_MODE`.
+
+In `container` and `lima` modes the host session directory is mounted into the
+agent home, so continuing a session works across runtimes.
 
 ### `pisbx vm status\|start\|stop\|delete\|shell`
 
