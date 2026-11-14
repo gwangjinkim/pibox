@@ -162,8 +162,14 @@ Steps:
 - otherwise `container`
 
 If remote is selected but your global `settings.json` lists packages that import
-`@earendil-works/*`, `pibox` refuses to start and prints three options (container
-with migrate, native, or `--no-extensions`). This replaces a wall of extension
+`@earendil-works/*`, `pibox` refuses to start and prints three options:
+
+1. run `pibox migrate` for this project, then continue in container mode
+2. `--mode native` (no sandbox, exact setup)
+3. `--no-extensions` (sandboxed, extensions off)
+
+Option 1 is executed automatically: it writes `pibox.toml`/`pibox.lock`, builds
+`.pibox/env`, then continues the same run in container mode. This replaces a wall of extension
 load errors.
 
 ### Model resolution

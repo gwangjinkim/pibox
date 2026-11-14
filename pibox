@@ -30,7 +30,7 @@ if [[ -z "${PIBOX_CONFIG_DIR:-}" && -d "$HOME/.config/pisbx" && ! -d "$HOME/.con
   chmod 600 "$HOME/.config/pibox"/*.json 2>/dev/null || true
 fi
 
-PIBOX_VERSION="1.0.0"
+PIBOX_VERSION="1.0.1"
 CFG_DIR="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -696,7 +696,7 @@ global_package_count() {
   jq -r '.packages | length? // 0' "$AGENT_DIR/settings.json" 2>/dev/null || echo 0
 }
 
-PREFLIGHT_MODE=""; PREFLIGHT_NO_EXT=0
+PREFLIGHT_MODE=""; PREFLIGHT_NO_EXT=0; PREFLIGHT_MIGRATE=0
 
 preflight_remote() {
   [[ "$NO_EXT" == 1 ]] && return 0
@@ -715,10 +715,10 @@ preflight_remote() {
     printf '  choice [1/2/3/q]: ' >&2
     local a; read -r a
     case "$a" in
-      1) exit 0 ;;
+      1) PREFLIGHT_MIGRATE=1; PREFLIGHT_MODE=container ;;
       2) PREFLIGHT_MODE=native ;;
       3) PREFLIGHT_NO_EXT=1 ;;
-      q|Q) exit 0 ;;
+      q|Q) printf '  aborted.\n' >&2; exit 0 ;;
       *) return 5 ;;
     esac
     return 0
@@ -1358,6 +1358,15 @@ cmd_run() {
     preflight_remote || die "remote cannot load your extensions; use --mode native, --mode container (with pibox migrate), or --no-extensions"
     [[ -n "$PREFLIGHT_MODE" ]] && mode="$PREFLIGHT_MODE"
     [[ "$PREFLIGHT_NO_EXT" == 1 ]] && NO_EXT=1
+    if [[ "$PREFLIGHT_MIGRATE" == 1 ]]; then
+      if [[ "$dry" == 1 ]]; then
+        info "dry run: would run 'pibox migrate' and continue in container mode"
+        exit 0
+      fi
+      info "migrating this project (pibox migrate)"
+      cmd_migrate
+      mode=container
+    fi
   fi
 
   info "model=$model provider=$provider variant=$variant env=$envvar runtime=$runtime mode=$mode"
