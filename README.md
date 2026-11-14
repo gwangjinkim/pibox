@@ -18,6 +18,45 @@ No `export`. No `.env`. No key names to remember.
 
 ---
 
+## Quick start
+
+```bash
+# 1. install
+git clone https://github.com/gwangjinkim/pisbx.git
+cd pisbx && ./install.sh
+
+# 2. build the sandbox images once (required before the first run)
+pisbx bootstrap
+
+# 3. put a credential in the OS keyring (hidden prompt)
+pisbx init                     # import providers from ~/.pi/agent/auth.json
+# or directly:
+skey set opencode-go app00
+
+# 4. run from the project you want the agent to see
+cd ~/code/my-project
+pisbx run --model opencode-go/muse-spark-1.3-contributor
+
+# 5. later, update the clone and rebuild the images
+pisbx update
+```
+
+If the folder already has sessions, `pisbx` asks whether to continue the last one
+or start fresh. Skip the prompt with `--session-mode continue` or `--session-mode new`.
+
+First-run checklist:
+
+| Check | Why |
+|---|---|
+| `pisbx doctor` | dependencies, Docker/Lima, keyring entries, file permissions |
+| `pisbx bootstrap` | without it you get `image 'pisbx-sandbox' is missing` |
+| `pisbx migrate --dry-run` | optional: strip plaintext keys from `auth.json` |
+
+More: [Quick start](docs/quickstart.md) · [Command reference](docs/commands.md) ·
+[Troubleshooting](docs/troubleshooting.md)
+
+---
+
 ## Status
 
 `pisbx` is a small, auditable launcher (one bash script). It is **not** a security
@@ -257,92 +296,18 @@ copying the script without a clone, set `PISBX_REPO=/path/to/pisbx`.
 
 ---
 
-## Quick start (each step, and why)
+## Documentation
 
-### Step 1 — register keys once
+| Document | Contents |
+|---|---|
+| [docs/quickstart.md](docs/quickstart.md) | first run, step by step, with expected output and why each step exists |
+| [docs/commands.md](docs/commands.md) | every subcommand, flag, environment variable, and session behavior |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | the errors people actually hit, and the fix |
+| [docs/design.md](docs/design.md) | credential flow, split vs whole execution, threat model |
+| [CHANGELOG.md](CHANGELOG.md) | what changed in each release |
 
-```bash
-pisbx init
-```
-
-It reads `~/.pi/agent/auth.json`, lists every provider you have ever configured, and
-calls `skey set <provider> default` for each one that is not in the keyring yet.
-`skey` prompts with hidden input and stores the value in the OS keyring.
-
-**Why this step:** it is the only time you handle the raw secret. Afterwards the
-value never appears in a shell, a file, or a log.
-
-Check the plan first if you prefer:
-
-```bash
-pisbx init --dry-run
-```
-
-### Step 2 — remove secrets from `auth.json`
-
-```bash
-pisbx migrate --dry-run   # show exactly what would change
-pisbx migrate
-```
-
-`migrate` classifies each entry:
-
-| Entry form | Action | Reason |
-|---|---|---|
-| literal key (`sk-…`) | **remove** | plaintext secret on disk |
-| `"!skey get …"` | **remove** | `skey get` is interactive-only, so this fails closed and is dead weight |
-| `"$ENV_VAR"` | keep | contains no secret |
-| OAuth (`type: "oauth"`) | keep | owned by `pi /login`, not the keyring |
-
-It writes `auth.json.backup.<timestamp>` (mode `600`) and prints the rollback
-command.
-
-**Why this step:** a secret in `auth.json` is readable by every process running as
-you, and by any extension or MCP server you load. Removing it is the whole point.
-
-### Step 3 — build the sandbox images once
-
-```bash
-pisbx bootstrap
-```
-
-Writes two Dockerfiles into `~/.config/pisbx/docker/` and builds:
-
-- `pisbx-sandbox` — pi + the workspace daemon (`pi --daemon`), for `--mode remote`
-- `pisbx-full` — a complete pi install, for `--mode container`
-
-**Why two images:** `remote` needs only the daemon (smaller attack surface, no
-provider credentials inside). `container` needs a full install because pi itself
-runs there.
-
-### Step 4 — run
-
-```bash
-cd ~/code/my-project
-pisbx run --model opencode-go/muse-spark-1.3-contributor
-```
-
-Everything after the known flags is forwarded to `pi`, so this works too:
-
-```bash
-pisbx run --model anthropic/claude-sonnet-4 -p "explain this repo"
-pisbx run --model openai/gpt-5.6 -c
-pisbx run --model google/gemini-3.1-pro --tools read,grep,find,ls
-```
-
-**Why no key flag:** the key is selected from `--model`'s provider prefix. You
-cannot forget an environment variable, and you cannot accidentally use the wrong
-one.
-
-### Step 5 — verify the isolation yourself
-
-```bash
-# inside the agent
-bash -c 'head -1 /etc/os-release; ls /workspace; env | grep -c API_KEY'
-```
-
-Expected: a container OS (Debian), your project mounted at `/workspace`, and `0`
-for the key count in `remote` mode.
+If you only read one page: run `pisbx bootstrap` once, then `pisbx run --model
+provider/model`. Everything else is optional.
 
 ---
 
@@ -380,6 +345,18 @@ about plaintext keys. Exit code is non-zero when a security check fails, so it i
 usable in CI.
 
 Why it exists: most security failures are configuration drift, not exploits.
+
+### `pisbx update [--check] [--no-bootstrap] [--force]`
+
+Pulls the clone recorded by `install.sh` at `~/.config/pisbx/install.json`,
+refreshes `~/.local/bin/pisbx`, and rebuilds the images.
+
+- `--check` shows whether a newer commit exists, without changing anything
+- `--no-bootstrap` pulls and reinstalls but keeps the current images
+- `--force` allows updating a checkout with local modifications
+
+Why it exists: the script and the Docker images must move together; a half-updated
+install is the most common source of confusing failures.
 
 ### `pisbx run --model <provider>/<model> [options] [-- pi args]`
 
