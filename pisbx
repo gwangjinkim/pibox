@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-PISBX_VERSION="0.4.0"
+PISBX_VERSION="0.5.0"
 CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -235,7 +235,9 @@ session_base() {
 session_dir() {
   local base p
   base="$(session_base)"
-  p="${PWD#/}"
+  # use the physical path: macOS /tmp is a symlink to /private/tmp
+  p="$(cd "$PWD" 2>/dev/null && pwd -P || printf '%s' "$PWD")"
+  p="${p#/}"
   p="${p//\//-}"
   printf '%s/--%s--' "$base" "$p"
 }
@@ -417,6 +419,215 @@ cmd_work() {
       git -C "$root" worktree prune >/dev/null 2>&1 || true
       ;;
     *) die "work: use list|clean" ;;
+  esac
+}
+
+
+# ---------- recovery ----------
+our_containers() {
+  { docker ps -a --filter 'label=pisbx=1' --format '{{.ID}}\t{{.Names}}\t{{.Status}}' 2>/dev/null || true
+    docker ps -a --filter 'name=^pisbx-' --format '{{.ID}}\t{{.Names}}\t{{.Status}}' 2>/dev/null || true
+  } | sort -u
+}
+
+stale_tmp_dirs() {
+  local base d
+  for base in "${TMPDIR:-/tmp}" /tmp; do
+    for d in "$base"/pisbx.*; do
+      [[ -d "$d" ]] || continue
+      if find "$d" -maxdepth 0 -mmin +10 2>/dev/null | grep -q .; then
+        printf '%s\n' "$d"
+      fi
+    done
+  done | sort -u
+}
+
+clean_containers() {
+  local force="${1:-0}" id name status
+  local lines; lines="$(our_containers)"
+  [[ -n "$lines" ]] || return 0
+  while IFS=$'\t' read -r id name status; do
+    [[ -n "$id" ]] || continue
+    if [[ "$status" == Up* && "$force" != 1 ]]; then
+      warn "running container kept: $name ($status) - use --force to remove"
+      continue
+    fi
+    docker rm -f "$id" >/dev/null 2>&1 && dim "removed container $name ($status)"
+  done <<<"$lines"
+}
+
+clean_tmp() {
+  local d
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    if [[ -f "$d/auth.json" ]]; then
+      dd if=/dev/zero of="$d/auth.json" bs=1024 count=1 conv=notrunc 2>/dev/null || true
+    fi
+    rm -rf "$d" && dim "removed $d"
+  done < <(stale_tmp_dirs)
+}
+
+env_incomplete() {
+  local root; root="$(project_root || true)"
+  [[ -n "$root" && -f "$(lock_path "$root")" ]] || return 1
+  local n; n="$(jq -r '.extensions | length' "$(lock_path "$root")" 2>/dev/null || echo 0)"
+  [[ "$n" -gt 0 ]] || return 1
+  [[ -d "$(env_path "$root")/npm/node_modules" ]] && return 1
+  return 0
+}
+
+cmd_recover() {
+  local fix=0
+  [[ "${1:-}" == "--fix" ]] && fix=1
+  local root; root="$(project_root || true)"
+
+  info "containers"
+  local cl; cl="$(our_containers)"
+  if [[ -z "$cl" ]]; then dim "none"; else printf '%s\n' "$cl" | sed 's/^/  /'; fi
+
+  info "temporary agent dirs"
+  local tl; tl="$(stale_tmp_dirs)"
+  if [[ -z "$tl" ]]; then dim "none older than 10 minutes"; else printf '%s\n' "$tl" | sed 's/^/  /'; fi
+
+  info "git workspaces"
+  if [[ -n "$root" && -d "$root/.pisbx/work" ]]; then
+    local d n
+    for d in "$root/.pisbx/work"/*; do
+      [[ -d "$d" ]] || continue
+      n="$(git -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+      printf '  %s  changes=%s\n' "$(basename "$d")" "${n:-?}"
+    done
+  else
+    dim "none"
+  fi
+
+  info "environment"
+  if env_incomplete; then
+    warn "incomplete (lock lists extensions but the environment is missing)"
+  else
+    dim "ok, or not configured"
+  fi
+
+  info "sessions"
+  printf '  %s session(s) for this folder\n' "$(session_count)"
+  dim "list: pisbx sessions list"
+
+  if [[ "$fix" == 1 ]]; then
+    info "applying safe fixes"
+    clean_containers 0
+    clean_tmp
+    [[ -n "$root" ]] && cmd_work clean
+    if env_incomplete; then
+      info "rebuilding incomplete environment"
+      seed_env "$root"
+      sync_env "$root"
+    fi
+    info "recovery complete"
+  else
+    dim "apply safe fixes with: pisbx recover --fix"
+  fi
+}
+
+cmd_clean() {
+  local do_containers=1 do_tmp=1 do_work=0 do_env=0 force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --containers) do_containers=1; shift ;;
+      --no-containers) do_containers=0; shift ;;
+      --tmp) do_tmp=1; shift ;;
+      --no-tmp) do_tmp=0; shift ;;
+      --work) do_work=1; shift ;;
+      --env) do_env=1; shift ;;
+      --force) force=1; shift ;;
+      --all) do_containers=1; do_tmp=1; do_work=1; do_env=1; shift ;;
+      *) die "clean: unknown option $1" ;;
+    esac
+  done
+  [[ "$do_containers" == 1 ]] && clean_containers "$force"
+  [[ "$do_tmp" == 1 ]] && clean_tmp
+  [[ "$do_work" == 1 ]] && cmd_work clean
+  if [[ "$do_env" == 1 ]]; then
+    local root; root="$(project_root || true)"
+    [[ -n "$root" ]] || die "clean --env: no pisbx.toml found"
+    rm -rf "$(env_path "$root")" && dim "removed $(env_path "$root")"
+    dim "rebuild with: pisbx sync"
+  fi
+  info "clean complete"
+}
+
+# ---------- sessions ----------
+session_id_from_path() {
+  local base; base="$(basename "$1" .jsonl)"
+  printf '%s' "${base##*_}"
+}
+
+session_pick() {
+  local want="${1:-latest}" dir f
+  dir="$(session_dir)"
+  [[ -d "$dir" ]] || die "no sessions for this folder"
+  if [[ "$want" == latest ]]; then
+    latest_session
+    return
+  fi
+  for f in "$dir"/*.jsonl; do
+    [[ -e "$f" ]] || continue
+    case "$(session_id_from_path "$f")" in
+      "$want"*) printf '%s' "$f"; return 0 ;;
+    esac
+  done
+  die "no session matching '$want'"
+}
+
+default_model_from_settings() {
+  jq -r 'if .defaultProvider and .defaultModel then .defaultProvider + "/" + .defaultModel else empty end' \
+    "$AGENT_DIR/settings.json" 2>/dev/null || true
+}
+
+cmd_sessions() {
+  local action="${1:-list}"; shift || true
+  case "$action" in
+    list)
+      local dir f ts size id count=0
+      dir="$(session_dir)"
+      [[ -d "$dir" ]] || { info "no sessions for this folder"; return 0; }
+      for f in "$dir"/*.jsonl; do
+        [[ -e "$f" ]] || continue
+        count=$((count+1))
+        ts="$(basename "$f" | cut -c1-19 | tr 'T' ' ' | sed -E 's/^([0-9]{4}-[0-9]{2}-[0-9]{2}) ([0-9]{2})-([0-9]{2})-([0-9]{2})$/\1 \2:\3:\4/')"
+        size="$(du -h "$f" 2>/dev/null | cut -f1)"
+        id="$(session_id_from_path "$f")"
+        printf '%s  %6s  %s\n' "$ts" "$size" "$id"
+      done
+      [[ "$count" == 0 ]] && info "no sessions for this folder"
+      ;;
+    resume)
+      local want="latest" model=""
+      local -a extra=()
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --model) model="$2"; shift 2 ;;
+          --) shift; extra=("$@"); break ;;
+          *) want="$1"; shift ;;
+        esac
+      done
+      local f; f="$(session_pick "$want")"
+      [[ -n "$model" ]] || model="$(default_model_from_settings)"
+      [[ -n "$model" ]] || die "pass --model provider/model (no default in settings.json)"
+      info "resuming $(session_id_from_path "$f")"
+      local -a args=(run pi --model "$model")
+      args+=(--)
+      args+=(--session "$f")
+      args+=(${extra[@]+"${extra[@]}"})
+      exec "$0" ${args[@]+"${args[@]}"}
+      ;;
+    export)
+      local want="${1:-latest}" out="${2:-}"
+      local f; f="$(session_pick "$want")"
+      [[ -n "$out" ]] || out="pi-session-$(session_id_from_path "$f").html"
+      pi --export "$f" "$out" >/dev/null 2>&1 || die "pi --export failed"
+      info "exported to $out"
+      ;;
+    *) die "sessions: use list|resume|export" ;;
   esac
 }
 
@@ -947,6 +1158,7 @@ cmd_run() {
 
     info "starting sandbox daemon on 127.0.0.1:$port"
     docker run -d --rm --name "$name" \
+      --label pisbx=1 --label "pisbx.workspace=$(workspace_src)" \
       -e PI_DAEMON_TOKEN="$token" \
       -v "$(workspace_src):/workspace" \
       -p "127.0.0.1:$port:8787" \
@@ -1438,6 +1650,19 @@ COMMANDS
   work list|clean
       List or remove git workspaces under .pisbx/work/.
 
+  recover [--fix]
+      Diagnose leftover state after a crash: containers, temp agent dirs,
+      git workspaces, incomplete environment. --fix applies safe cleanup.
+
+  clean [--containers] [--tmp] [--work] [--env] [--all]
+      Targeted cleanup. Default removes stopped containers and stale temp
+      dirs; running containers need --force.
+
+  sessions list|resume|export
+      list:   sessions for this folder with timestamp, size, id
+      resume: pisbx sessions resume <id|latest> [--model M] [-- pi args]
+      export: pisbx sessions export <id|latest> [out.html]
+
   run also accepts --workspace mount|git. git mode creates a worktree
   from a snapshot of your dirty tree, copies untracked non-ignored
   files, excludes .gitignored files such as .env, and commits the
@@ -1491,6 +1716,9 @@ main() {
     run) cmd_run "$@" ;;
     vm) cmd_vm "$@" ;;
     work) cmd_work "$@" ;;
+    recover) cmd_recover "$@" ;;
+    clean) cmd_clean "$@" ;;
+    sessions) cmd_sessions "$@" ;;
     _launch) cmd_launch "$@" ;;
     version|--version|-v) echo "$PISBX_VERSION" ;;
     help|-h|--help) cmd_help ;;

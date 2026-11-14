@@ -449,6 +449,26 @@ Non-interactive runs, and runs that already pass a session flag (`-c`, `--sessio
 In `container` and `lima` modes the host session directory is mounted into the
 agent home, so continuing a session works across runtimes.
 
+### `pisbx recover [--fix]`
+
+After a crash, this reports leftover containers, stale temp agent dirs, git
+worktrees, an incomplete environment, and the session count. `--fix` removes
+stopped containers, stale temp dirs, and clean worktrees, and rebuilds an
+incomplete environment. Running containers and branches are never deleted.
+
+### `pisbx clean [--containers] [--tmp] [--work] [--env] [--all] [--force]`
+
+Targeted cleanup. Default is stopped containers plus stale temp dirs;
+`--force` includes running containers; `--env` removes `.pisbx/env`.
+
+### `pisbx sessions list|resume|export`
+
+```bash
+pisbx sessions list
+pisbx sessions resume latest --model opencode-go/muse-spark-1.3-contributor
+pisbx sessions export latest out.html
+```
+
 ### `pisbx vm status\|start\|stop\|delete\|shell`
 
 Manages the Lima instance used by `--runtime lima`.

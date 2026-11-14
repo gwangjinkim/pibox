@@ -185,6 +185,53 @@ pisbx run --model anthropic/claude-sonnet-4 -- -c
 
 ---
 
+## `pisbx recover [--fix]`
+
+Diagnoses state left behind by a crash:
+
+- running and stopped `pisbx-*` containers (labelled `pisbx=1`)
+- stale temp agent dirs older than 10 minutes (`.pisbx.*` under `$TMPDIR` and `/tmp`)
+- git worktrees under `.pisbx/work/`
+- an incomplete environment (lock lists extensions, `env/npm` missing)
+- session count for the current folder
+
+`--fix` applies safe cleanup:
+
+- removes **stopped** containers; running ones are kept with a warning
+- removes stale temp dirs (overwrites `auth.json` before deleting)
+- removes clean worktrees (branches are never deleted)
+- rebuilds an incomplete environment
+
+## `pisbx clean [--containers] [--tmp] [--work] [--env] [--all] [--force]`
+
+Targeted cleanup. Default: stopped containers + stale temp dirs.
+
+| Flag | Effect |
+|---|---|
+| `--containers` | remove stopped `pisbx` containers |
+| `--tmp` | remove stale temp agent dirs |
+| `--work` | prune clean git worktrees |
+| `--env` | delete `.pisbx/env` (rebuild with `pisbx sync`) |
+| `--force` | include running containers |
+| `--all` | all of the above except removing running containers |
+
+## `pisbx sessions list|resume|export`
+
+```bash
+pisbx sessions list
+pisbx sessions resume latest --model opencode-go/muse-spark-1.3-contributor
+pisbx sessions resume 01a1db17 --model provider/model -- -p "continue"
+pisbx sessions export latest out.html
+```
+
+- `list` shows timestamp, size, and session id for this folder
+- `resume` restarts pi with `--session <path>`; `--model` defaults to
+  `defaultProvider/defaultModel` from `settings.json`
+- `export` uses `pi --export` to produce a standalone HTML file
+
+Session folders are computed from the **physical** working directory, so `/tmp`
+and `/private/tmp` resolve to the same session directory.
+
 ## `pisbx work list|clean`
 
 - `list` shows worktrees under `.pisbx/work/` and their change count

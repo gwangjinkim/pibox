@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0
+
+- **`pisbx recover [--fix]`:** diagnoses leftover state after a crash
+  (containers, stale temp agent dirs, worktrees, incomplete environment) and
+  applies safe cleanup.
+- **`pisbx clean`:** targeted cleanup with `--containers`, `--tmp`, `--work`,
+  `--env`, `--all`, `--force`. Running containers are only removed with
+  `--force`.
+- **`pisbx sessions list|resume|export`:** inspect, resume by id/latest, and
+  export sessions to HTML.
+- Containers are labelled `pisbx=1` so cleanup can never touch unrelated ones.
+- Session folders use the physical path, fixing `/tmp` vs `/private/tmp`.
+
 ## 0.4.0
 
 - **`--workspace git`:** isolates the agent in a git worktree built from a

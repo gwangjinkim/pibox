@@ -27,7 +27,7 @@ check "no literal key patterns in tracked files" bash -c "
 
 # every command must be discoverable from the short help
 commands="$("$bin" help | awk '/^COMMANDS/{f=1;next} f&&/^  [a-z]/{print $1}' | sort -u)"
-for c in init migrate bootstrap update doctor run vm version help; do
+for c in init migrate bootstrap update doctor run vm work recover clean sessions add remove export sync env version help; do
   if grep -qx "$c" <<<"$commands"; then
     printf 'ok   help lists %s\n' "$c"
   else
