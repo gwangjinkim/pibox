@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-PISBX_VERSION="0.5.0"
+PISBX_VERSION="0.5.1"
 CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -631,6 +631,51 @@ cmd_sessions() {
   esac
 }
 
+
+# ---------- mode preflight ----------
+sandbox_pi_family() {
+  local real
+  real="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$SANDBOX_PI" 2>/dev/null || printf '%s' "$SANDBOX_PI")"
+  case "$real" in
+    *@earendil-works*) echo earendil ;;
+    *) echo fleetagent ;;
+  esac
+}
+
+global_package_count() {
+  jq -r '.packages | length? // 0' "$AGENT_DIR/settings.json" 2>/dev/null || echo 0
+}
+
+PREFLIGHT_MODE=""; PREFLIGHT_NO_EXT=0
+
+preflight_remote() {
+  [[ "$NO_EXT" == 1 ]] && return 0
+  local n; n="$(global_package_count)"
+  [[ "${n:-0}" -gt 0 ]] || return 0
+  [[ "$(sandbox_pi_family)" == earendil ]] && return 0
+
+  warn "your global pi has $n extension(s) built for @earendil-works"
+  warn "remote mode uses the @fleetagent sandbox build and cannot load them"
+  printf '  choose one:\n' >&2
+  printf '    1) pisbx migrate && pisbx run --mode container   sandboxed, extensions work\n' >&2
+  printf '    2) pisbx run --mode native                       no sandbox, exact setup\n' >&2
+  printf '    3) pisbx run --no-extensions                     sandboxed, extensions off\n' >&2
+
+  if [[ -t 0 && -t 1 ]]; then
+    printf '  choice [1/2/3/q]: ' >&2
+    local a; read -r a
+    case "$a" in
+      1) exit 0 ;;
+      2) PREFLIGHT_MODE=native ;;
+      3) PREFLIGHT_NO_EXT=1 ;;
+      q|Q) exit 0 ;;
+      *) return 5 ;;
+    esac
+    return 0
+  fi
+  return 5
+}
+
 # ---------- workspace guard ----------
 guard_workspace() {
   local target="$1" force="${2:-0}"
@@ -1030,7 +1075,7 @@ cmd_run() {
       die "pisbx runs pi only; use agentbox for ${1}" ;;
   esac
   local runtime="" model="" mode="" force=0 dry=0
-  local ws_mode="" session_mode="${PISBX_SESSION_MODE:-ask}"
+  local ws_mode="" session_mode="${PISBX_SESSION_MODE:-ask}" NO_EXT=0
   local -a passthru=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1040,6 +1085,7 @@ cmd_run() {
       --force) force=1; shift ;;
       --session-mode) session_mode="$2"; shift 2 ;;
       --workspace) ws_mode="$2"; shift 2 ;;
+      --no-extensions) NO_EXT=1; shift ;;
       --dry-run) dry=1; shift ;;
       *) passthru+=("$1"); shift ;;
     esac
@@ -1056,13 +1102,23 @@ cmd_run() {
   local variant="$KEY_VARIANT" envvar="$KEY_ENV"
 
   if [[ "$mode" == auto ]]; then
-    local help_text=""
-    help_text="$("$SANDBOX_PI" --help 2>&1 || true)"
-    if grep -q -- '--remote <url>' <<<"$help_text"; then
-      mode=remote
-    else
+    if project_root >/dev/null 2>&1; then
       mode=container
+    else
+      local help_text=""
+      help_text="$("$SANDBOX_PI" --help 2>&1 || true)"
+      if grep -q -- '--remote <url>' <<<"$help_text"; then
+        mode=remote
+      else
+        mode=container
+      fi
     fi
+  fi
+
+  if [[ "$mode" == remote ]]; then
+    preflight_remote || die "remote cannot load your extensions; use --mode native, --mode container (with pisbx migrate), or --no-extensions"
+    [[ -n "$PREFLIGHT_MODE" ]] && mode="$PREFLIGHT_MODE"
+    [[ "$PREFLIGHT_NO_EXT" == 1 ]] && NO_EXT=1
   fi
 
   info "model=$model provider=$provider variant=$variant env=$envvar runtime=$runtime mode=$mode"
@@ -1168,12 +1224,13 @@ cmd_run() {
     trap on_exit EXIT INT TERM
     wait_daemon "$name" || die "sandbox daemon failed to start"
 
-    if [[ -f "$AGENT_DIR/settings.json" ]] && jq -e '.packages | length > 0' "$AGENT_DIR/settings.json" >/dev/null 2>&1; then
+    if [[ "$NO_EXT" != 1 && -f "$AGENT_DIR/settings.json" ]] && jq -e '.packages | length > 0' "$AGENT_DIR/settings.json" >/dev/null 2>&1; then
       warn "remote mode uses the sandbox pi build; extensions that import @earendil-works/* will not load"
       dim "for your exact extensions and dashboard: --mode native (runs on this host, no sandbox)"
     fi
     info "tools run in the container; key is written to an ephemeral 0600 agent dir"
     PI_REMOTE_TOKEN="$token" PISBX_PORT="$port" PISBX_AGENT_DIR="$dir" \
+      PISBX_NO_EXTENSIONS="${NO_EXT}" \
       skey run --no-redact "$provider" "$variant" --env PISBX_SECRET -y -- \
       "$0" _launch --provider "$provider" --model "$model" \
       ${passthru[@]+"${passthru[@]}"}
@@ -1622,6 +1679,7 @@ COMMANDS
                                  remote = orchestrate on host, tools in
                                  container (default: auto)
                                  native = your own pi and config, no sandbox
+      --no-extensions            do not load extensions (quiet sandboxed runs)
       --session-mode ask|continue|new
                                  ask (default) prompts when the folder has
                                  sessions; continue passes -c; new starts fresh

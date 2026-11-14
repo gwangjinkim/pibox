@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.1
+
+- **Auto mode fix:** a project with `pisbx.toml` now selects `container`, so
+  `@earendil-works` extensions load from the project environment (verified).
+- **Remote preflight:** when remote would use the `@fleetagent` build while
+  global extensions target `@earendil-works`, `pisbx` stops with three options
+  instead of emitting extension load errors.
+- **`--no-extensions`:** run the sandbox without loading extensions.
+- Verified: `mode=container` with a migrated environment loads all 8 extensions;
+  `remote --no-extensions` runs clean.
+
 ## 0.5.0
 
 - **`pisbx recover [--fix]`:** diagnoses leftover state after a crash

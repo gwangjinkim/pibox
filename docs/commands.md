@@ -138,6 +138,20 @@ Steps:
 | `--workspace mount\|git` | `mount` | live bind mount, or an isolated git worktree |
 | `--dry-run` | off | print the plan; do not read a secret or start anything |
 | `--force` | off | allow mounting `$HOME` or `/` as the workspace |
+| `--no-extensions` | off | pass `--no-extensions` to pi |
+
+### Mode selection
+
+`--mode auto` (default):
+
+- if the project has `pisbx.toml` → `container` (project environment is mounted)
+- otherwise `remote` when the sandbox `pi` supports `--remote`
+- otherwise `container`
+
+If remote is selected but your global `settings.json` lists packages that import
+`@earendil-works/*`, `pisbx` refuses to start and prints three options (container
+with migrate, native, or `--no-extensions`). This replaces a wall of extension
+load errors.
 
 ### Model resolution
 

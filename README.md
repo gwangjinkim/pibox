@@ -367,11 +367,27 @@ install is the most common source of confusing failures.
 | `--mode remote\|container\|native` | `auto` | `remote` keeps the key out of the sandbox; `container` is portable and CI-friendly; `native` uses your exact `pi` and config, without a sandbox |
 | `--dry-run` | off | shows the plan without reading a secret or starting anything |
 | `--force` | off | allows mounting `$HOME` or `/` as the workspace (dangerous) |
+| `--no-extensions` | off | do not load extensions in the sandbox |
 | `--session-mode ask\|continue\|new` | `ask` | when the folder already has sessions, ask; `continue` passes `-c`; `new` starts fresh |
 | `--workspace mount\|git` | `mount` | `mount` edits your live tree; `git` works in a worktree and commits to `pisbx/<session>` |
 
-`auto` picks `remote` when the installed `pi` supports `--remote`, otherwise
-`container`.
+`auto` picks `container` when the project has a `pisbx.toml` (so the project
+environment is used), and otherwise `remote` when the installed sandbox `pi`
+supports `--remote`.
+
+**Extension build mismatch.** Remote mode requires the `@fleetagent` sandbox build.
+Extensions written against `@earendil-works/*` cannot load there. If your global
+`settings.json` declares packages and `auto` would choose remote, `pisbx` stops
+with three options instead of printing load errors:
+
+```
+1) pisbx migrate && pisbx run --mode container   sandboxed, extensions work
+2) pisbx run --mode native                       no sandbox, exact setup
+3) pisbx run --no-extensions                     sandboxed, extensions off
+```
+
+Container mode with a project environment is the only sandboxed mode that loads
+`@earendil-works` extensions. Verified: `mode=container`, no load errors.
 
 ### How fast is sync?
 
