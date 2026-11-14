@@ -300,9 +300,9 @@ Docker on macOS:
 ```console
 [3/3] docker or lima (sandbox runtime) is missing.
   options:
-    1) Docker Desktop   brew install --cask docker
-    2) colima           brew install colima docker && colima start
-    3) lima (VM)        brew install lima
+    1) colima (recommended)  brew install colima docker && colima start
+    2) Docker Desktop        brew install --cask docker
+    3) lima (VM)             brew install lima
     4) skip
   choose [1-4]: 1
   command:

@@ -221,8 +221,8 @@ dep_hint() {
     docker)
       case "$OS" in
         macos)
-          printf '    option A: Docker Desktop  https://docs.docker.com/desktop/install/mac-install/\n'
-          printf '    option B: brew install colima docker && colima start\n'
+          printf '    option A (smallest): brew install colima docker && colima start\n'
+          printf '    option B: Docker Desktop  https://docs.docker.com/desktop/install/mac-install/\n'
           printf '    option C: brew install lima   (VM runtime)\n' ;;
         windows)
           printf '    install Docker Desktop with the WSL2 backend:\n'
@@ -334,15 +334,15 @@ choose_docker() {
     macos)
       if have brew; then
         printf '  options:\n' >&2
-        printf '    1) Docker Desktop   brew install --cask docker\n' >&2
-        printf '    2) colima           brew install colima docker && colima start\n' >&2
-        printf '    3) lima (VM)        brew install lima\n' >&2
+        printf '    1) colima (recommended)  brew install colima docker && colima start\n' >&2
+        printf '    2) Docker Desktop        brew install --cask docker\n' >&2
+        printf '    3) lima (VM)             brew install lima\n' >&2
         printf '    4) skip\n' >&2
         printf '  choose [1-4]: ' >&2
         local c; read -r c
         case "$c" in
-          1|"") echo "brew install --cask docker" ;;
-          2) echo "brew install colima docker && colima start" ;;
+          1|"") echo "brew install colima docker && colima start" ;;
+          2) echo "brew install --cask docker" ;;
           3) echo "brew install lima" ;;
           *) echo "" ;;
         esac
