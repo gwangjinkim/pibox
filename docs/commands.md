@@ -82,10 +82,15 @@ manifest, and re-syncs the environment.
 
 ---
 
-## `pisbx bootstrap`
+## `pisbx bootstrap [--minimal|--standard]`
 
 Writes `~/.config/pisbx/docker/Dockerfile` and `Dockerfile.sandbox`, then builds
 `pisbx-full` and `pisbx-sandbox`.
+
+`--minimal` builds `pisbx-full-min` and `pisbx-sandbox-min`: Alpine + a
+Bun-compiled single pi binary (~155 MB each instead of ~730 MB). The choice is
+stored as `defaults.variant`; `PISBX_VARIANT` overrides it, and `PISBX_IMAGE` /
+`PISBX_IMAGE_FULL` override the tags.
 
 Must be run:
 
@@ -296,6 +301,7 @@ limactl start --name=pisbx --tty=false template:docker-rootful
 | Variable | Meaning |
 |---|---|
 | `PISBX_CONFIG_DIR` | config, generated Dockerfiles, `install.json` |
+| `PISBX_VARIANT` | `standard` or `minimal` (image variant) |
 | `PISBX_IMAGE` | sandbox image tag (default `pisbx-sandbox`) |
 | `PISBX_IMAGE_FULL` | whole-container image tag (default `pisbx-full`) |
 | `PISBX_SANDBOX_PI` | host `pi` binary that supports `--remote` |

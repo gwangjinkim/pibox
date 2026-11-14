@@ -434,9 +434,16 @@ while preserving OAuth and `$ENV` references.
 Why it exists: you cannot get the security benefit while a plaintext key is still
 sitting in the config file.
 
-### `pisbx bootstrap`
+### `pisbx bootstrap [--minimal|--standard]`
 
 Writes `~/.config/pisbx/docker/Dockerfile{,.sandbox}` and builds both images.
+
+| Variant | Size per image | Base | Trade-off |
+|---|---|---|---|
+| `standard` | ~730 MB | `node:22-bookworm-slim` + toolchain | full build tools |
+| `--minimal` | ~155 MB | `alpine` + Bun-compiled binary | slower build, no compilers |
+
+The variant is stored in config; `PISBX_VARIANT=minimal` overrides it.
 
 Why it exists: the upstream default sandbox image is not publicly pullable, and
 building from a pinned `PI_VERSION` makes the environment reproducible.

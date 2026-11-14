@@ -71,7 +71,8 @@ the repo path is what makes `pisbx update` possible later.
 ## 2. Build the sandbox images (once)
 
 ```bash
-pisbx bootstrap
+pisbx bootstrap            # ~730 MB per image
+pisbx bootstrap --minimal  # ~155 MB per image (Alpine + Bun binary)
 ```
 
 This writes two Dockerfiles into `~/.config/pisbx/docker/` and builds:

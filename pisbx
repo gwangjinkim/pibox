@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-PISBX_VERSION="0.5.2"
+PISBX_VERSION="0.6.0"
 CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -88,6 +88,12 @@ cfg_set() {
   local tmp="$CFG.tmp.$$"
   jq --arg p "$1" --arg k "$2" --arg v "$3" \
     '.providers[$p] = ((.providers[$p] // {}) | .[$k] = $v)' "$CFG" >"$tmp"
+  chmod 600 "$tmp"; mv "$tmp" "$CFG"
+}
+cfg_set_default() {
+  ensure_cfg
+  local tmp="$CFG.tmp.$$"
+  jq --arg k "$1" --arg v "$2" '.defaults[$k] = $v' "$CFG" >"$tmp"
   chmod 600 "$tmp"; mv "$tmp" "$CFG"
 }
 cfg_default() {
@@ -422,6 +428,18 @@ cmd_work() {
   esac
 }
 
+
+resolve_images() {
+  local v="${PISBX_VARIANT:-$(cfg_default variant)}"
+  v="${v:-standard}"
+  if [[ "$v" == minimal ]]; then
+    IMAGE="${PISBX_IMAGE:-pisbx-sandbox-min}"
+    IMAGE_FULL="${PISBX_IMAGE_FULL:-pisbx-full-min}"
+  else
+    IMAGE="${PISBX_IMAGE:-pisbx-sandbox}"
+    IMAGE_FULL="${PISBX_IMAGE_FULL:-pisbx-full}"
+  fi
+}
 
 # ---------- recovery ----------
 our_containers() {
@@ -905,6 +923,7 @@ cmd_doctor() {
   printf 'lima        %s\n' "$(limactl --version 2>/dev/null | head -1 || echo missing)"
   printf 'lima vm     %s\n' "$(lima_state 2>/dev/null || echo unknown)"
   printf 'mode        %s / %s\n' "$(cfg_default runtime || true)" "$(cfg_default mode || true)"
+  printf 'variant     %s\n' "$(cfg_default variant || echo standard)"
 
   printf '\nkeyring (skey):\n'
   if command -v skey >/dev/null 2>&1; then
@@ -938,8 +957,85 @@ cmd_doctor() {
 }
 
 cmd_bootstrap() {
+  local variant="standard"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --minimal|--alpine) variant="minimal"; shift ;;
+      --standard) variant="standard"; shift ;;
+      *) die "bootstrap: unknown option $1" ;;
+    esac
+  done
+
   mkdir -p "$DOCKER_DIR"
-  cat >"$DOCKER_DIR/Dockerfile.sandbox" <<'DOCKER'
+  local image_sandbox image_full df_sandbox df_full
+
+  if [[ "$variant" == minimal ]]; then
+    image_sandbox="pisbx-sandbox-min"
+    image_full="pisbx-full-min"
+    df_sandbox="$DOCKER_DIR/Dockerfile.sandbox.min"
+    df_full="$DOCKER_DIR/Dockerfile.min"
+
+    cat >"$df_full" <<'DOCKER'
+FROM oven/bun:1-alpine AS build
+RUN apk add --no-cache nodejs npm
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2
+WORKDIR /usr/local/lib/node_modules/@earendil-works/pi-coding-agent
+RUN bun build --compile --minify ./dist/bun/cli.js --outfile /out/pi \
+    || bun build --compile --minify ./dist/cli.js --outfile /out/pi
+RUN mkdir -p /out/dist \
+    && (cp -R dist/core /out/dist/ 2>/dev/null || true) \
+    && (cp -R dist/modes /out/dist/ 2>/dev/null || true) \
+    && (cp "$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \
+    && cp package.json /out/
+FROM alpine:3.20
+RUN apk add --no-cache bash ca-certificates git ripgrep fd libstdc++
+RUN adduser -D -u 1000 -h /home/node node
+COPY --from=build /out /opt/pi
+RUN ln -s /opt/pi/pi /usr/local/bin/pi
+ENV HOME=/home/node TERM=xterm-256color
+WORKDIR /workspace
+USER node
+ENTRYPOINT ["pi"]
+DOCKER
+
+    cat >"$df_sandbox" <<'DOCKER'
+FROM oven/bun:1-alpine AS build
+RUN apk add --no-cache nodejs npm
+RUN npm install -g --ignore-scripts @fleetagent/pi-coding-agent@0.2.15
+WORKDIR /usr/local/lib/node_modules/@fleetagent/pi-coding-agent
+RUN bun build --compile --minify ./dist/bun/cli.js --outfile /out/pi \
+    || bun build --compile --minify ./dist/cli.js --outfile /out/pi
+RUN mkdir -p /out/dist \
+    && (cp -R dist/core /out/dist/ 2>/dev/null || true) \
+    && (cp -R dist/modes /out/dist/ 2>/dev/null || true) \
+    && (cp "$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \
+    && cp package.json /out/
+FROM alpine:3.20
+RUN apk add --no-cache bash ca-certificates git ripgrep fd libstdc++
+RUN adduser -D -u 1000 -h /home/node node
+COPY --from=build /out /opt/pi
+RUN ln -s /opt/pi/pi /usr/local/bin/pi
+ENV HOME=/home/node \
+    PI_DAEMON_HOST=0.0.0.0 \
+    PI_DAEMON_PORT=8787 \
+    PI_DAEMON_CWD=/workspace \
+    PI_DAEMON_TEMP_ROOT=/tmp \
+    TMPDIR=/tmp \
+    PI_DAEMON_ALLOW_INSECURE_TRANSPORT=1 \
+    PI_DAEMON_ALLOW_PROCESS_EXEC=1
+EXPOSE 8787
+WORKDIR /workspace
+USER node
+ENTRYPOINT ["pi"]
+CMD ["--daemon"]
+DOCKER
+  else
+    image_sandbox="pisbx-sandbox"
+    image_full="pisbx-full"
+    df_sandbox="$DOCKER_DIR/Dockerfile.sandbox"
+    df_full="$DOCKER_DIR/Dockerfile"
+    # standard Dockerfiles are written below, unchanged
+    cat >"$df_sandbox" <<'DOCKER'
 FROM node:22-bookworm-slim
 ARG PI_VERSION=0.2.15
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -958,7 +1054,7 @@ EXPOSE 8787
 ENTRYPOINT ["pi"]
 CMD ["--daemon"]
 DOCKER
-  cat >"$DOCKER_DIR/Dockerfile" <<'DOCKER'
+    cat >"$df_full" <<'DOCKER'
 FROM node:22-bookworm-slim
 ARG PI_VERSION=1.5.2
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -973,12 +1069,16 @@ WORKDIR /workspace
 USER 1000:1000
 ENTRYPOINT ["pi"]
 DOCKER
-  info "wrote $DOCKER_DIR/Dockerfile and Dockerfile.sandbox"
+  fi
+
+  info "wrote $df_full and $df_sandbox ($variant)"
 
   docker_ok || die "docker required to build images"
-  ensure_image "$IMAGE" "$DOCKER_DIR/Dockerfile.sandbox"
-  ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile"
-  info "images ready: $IMAGE, $IMAGE_FULL"
+  ensure_image "$image_full" "$df_full"
+  ensure_image "$image_sandbox" "$df_sandbox"
+  cfg_set_default variant "$variant"
+  info "images ready: $image_sandbox, $image_full ($variant)"
+  dim "sizes: $(docker image inspect "$image_sandbox" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}'), $(docker image inspect "$image_full" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}')"
 }
 
 resolve_key() {
@@ -1095,6 +1195,7 @@ cmd_run() {
   local provider="${model%%/*}"
   [[ "$provider" != "$model" ]] || die "use an explicit provider prefix, e.g. --model opencode-go/muse-spark-1.3-contributor"
 
+  resolve_images
   runtime="${runtime:-$(cfg_default runtime)}"; runtime="${runtime:-docker}"
   mode="${mode:-$(cfg_default mode)}"; mode="${mode:-auto}"
 
@@ -1676,9 +1777,11 @@ COMMANDS
       prompts), and auth.json entries. Writes pisbx.toml / pisbx.lock
       and builds .pisbx/env.
 
-  bootstrap
+  bootstrap [--minimal|--standard]
       Write config/docker/Dockerfile{,.sandbox} and build both images.
       Required once before the first run.
+      --minimal builds Alpine + Bun-compiled single-binary images
+      (~155MB instead of ~730MB). Slower to build, smaller to pull.
 
   update [--check] [--no-bootstrap] [--force]
       Git pull the clone recorded at install time, refresh
