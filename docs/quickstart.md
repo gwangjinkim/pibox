@@ -47,7 +47,15 @@ cd pisbx
 ./install.sh
 ```
 
-`install.sh`:
+`install.sh` detects your OS and package manager, offers to install missing
+prerequisites with one confirmation, and prints a numbered manual guide when it
+cannot automate (for example, no Homebrew or no supported package manager).
+
+```bash
+./install.sh --check    # show the plan, install nothing
+```
+
+It:
 
 - copies `pisbx` to `~/.local/bin` (or `$PISBX_BIN_DIR`)
 - records the clone location in `~/.config/pisbx/install.json`, so `pisbx update`

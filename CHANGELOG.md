@@ -1,5 +1,18 @@
 # Changelog
 
+## Installer
+
+- `install.sh` now detects the OS and package manager, lists missing
+  prerequisites, and offers to install them after one confirmation.
+- Per-OS commands: Homebrew (macOS), apt/dnf/pacman/zypper/apk (Linux), WSL
+  guidance (Windows).
+- `skey` is installed via `cargo install skey` or `go install`.
+- `node` and `pi` are checked; the sandbox `pi` build is reported separately.
+- If automation fails or is unavailable, a numbered step-by-step guide is printed
+  (base tools, skey, pi, container runtime, verification).
+- `./install.sh --check` reports the plan without installing anything.
+- Docker daemon reachability is checked and warned about.
+
 ## 0.5.2
 
 - **Fix: container and lima modes now mount the project environment.** The
