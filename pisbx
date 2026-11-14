@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-PISBX_VERSION="0.6.0"
+PISBX_VERSION="0.6.1"
 CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -154,6 +154,12 @@ platform_tag() {
     arm64|aarch64) echo linux/arm64 ;;
     *) die "unsupported architecture: $(uname -m)" ;;
   esac
+}
+
+build_image() {
+  local img="$1" dockerfile="$2"
+  [[ -f "$dockerfile" ]] || die "no Dockerfile at $dockerfile"
+  docker build --platform "$(platform_tag)" -f "$dockerfile" -t "$img" "$(dirname "$dockerfile")" >&2
 }
 
 ensure_image() {
@@ -988,8 +994,19 @@ RUN mkdir -p /out/dist \
     && (cp "$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \
     && cp package.json /out/
 FROM alpine:3.20
-RUN apk add --no-cache bash ca-certificates git ripgrep fd libstdc++
+RUN apk add --no-cache bash ca-certificates curl git ripgrep fd libstdc++
 RUN adduser -D -u 1000 -h /home/node node
+RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'EOF'
+# Sandbox environment
+
+- Alpine Linux. Use apk, not apt-get.
+- Available: bash, busybox, git, ripgrep, fd, curl.
+- Not installed by default: python3, node/npm, gcc/make, jq.
+- The project is mounted at /workspace; it is the only host path you can reach.
+- You normally run as uid 1000. To install packages, run with --root and use:
+    apk add --no-cache <package>
+- Prefer solving the task with the tools already present.
+EOF
 COPY --from=build /out /opt/pi
 RUN ln -s /opt/pi/pi /usr/local/bin/pi
 ENV HOME=/home/node TERM=xterm-256color
@@ -1011,8 +1028,19 @@ RUN mkdir -p /out/dist \
     && (cp "$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \
     && cp package.json /out/
 FROM alpine:3.20
-RUN apk add --no-cache bash ca-certificates git ripgrep fd libstdc++
+RUN apk add --no-cache bash ca-certificates curl git ripgrep fd libstdc++
 RUN adduser -D -u 1000 -h /home/node node
+RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'EOF'
+# Sandbox environment
+
+- Alpine Linux. Use apk, not apt-get.
+- Available: bash, busybox, git, ripgrep, fd, curl.
+- Not installed by default: python3, node/npm, gcc/make, jq.
+- The project is mounted at /workspace; it is the only host path you can reach.
+- You normally run as uid 1000. To install packages, run with --root and use:
+    apk add --no-cache <package>
+- Prefer solving the task with the tools already present.
+EOF
 COPY --from=build /out /opt/pi
 RUN ln -s /opt/pi/pi /usr/local/bin/pi
 ENV HOME=/home/node \
@@ -1045,6 +1073,14 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 RUN npm install -g --ignore-scripts @fleetagent/pi-coding-agent@${PI_VERSION} \
     && npm cache clean --force
 RUN mkdir -p /workspace /home/node/.pi && chown -R 1000:1000 /workspace /home/node
+RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'EOF'
+# Sandbox environment
+
+- Debian bookworm. Use apt-get if you need packages.
+- Available: bash, git, ripgrep, fd, jq, curl, python3, make, g++, node/npm.
+- The project is mounted at /workspace; it is the only host path you can reach.
+- You normally run as uid 1000. System package installs require --root.
+EOF
 ENV HOME=/home/node PI_DAEMON_HOST=0.0.0.0 PI_DAEMON_PORT=8787 \
     PI_DAEMON_CWD=/workspace PI_DAEMON_TEMP_ROOT=/tmp TMPDIR=/tmp \
     PI_DAEMON_ALLOW_INSECURE_TRANSPORT=1 PI_DAEMON_ALLOW_PROCESS_EXEC=1
@@ -1064,6 +1100,14 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_VERSION} \
     && npm cache clean --force
 RUN mkdir -p /workspace /home/node/.pi && chown -R 1000:1000 /workspace /home/node
+RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'EOF'
+# Sandbox environment
+
+- Debian bookworm. Use apt-get if you need packages.
+- Available: bash, git, ripgrep, fd, jq, curl, python3, make, g++, node/npm.
+- The project is mounted at /workspace; it is the only host path you can reach.
+- You normally run as uid 1000. System package installs require --root.
+EOF
 ENV HOME=/home/node TERM=xterm-256color
 WORKDIR /workspace
 USER 1000:1000
@@ -1074,8 +1118,10 @@ DOCKER
   info "wrote $df_full and $df_sandbox ($variant)"
 
   docker_ok || die "docker required to build images"
-  ensure_image "$image_full" "$df_full"
-  ensure_image "$image_sandbox" "$df_sandbox"
+  info "building $image_full"
+  build_image "$image_full" "$df_full"
+  info "building $image_sandbox"
+  build_image "$image_sandbox" "$df_sandbox"
   cfg_set_default variant "$variant"
   info "images ready: $image_sandbox, $image_full ($variant)"
   dim "sizes: $(docker image inspect "$image_sandbox" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}'), $(docker image inspect "$image_full" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}')"
@@ -1175,7 +1221,7 @@ cmd_run() {
       die "pisbx runs pi only; use agentbox for ${1}" ;;
   esac
   local runtime="" model="" mode="" force=0 dry=0
-  local ws_mode="" session_mode="${PISBX_SESSION_MODE:-ask}" NO_EXT=0
+  local ws_mode="" session_mode="${PISBX_SESSION_MODE:-ask}" NO_EXT=0 ROOT=0
   local -a passthru=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1186,6 +1232,7 @@ cmd_run() {
       --session-mode) session_mode="$2"; shift 2 ;;
       --workspace) ws_mode="$2"; shift 2 ;;
       --no-extensions) NO_EXT=1; shift ;;
+      --root) ROOT=1; shift ;;
       --dry-run) dry=1; shift ;;
       *) passthru+=("$1"); shift ;;
     esac
@@ -1214,6 +1261,10 @@ cmd_run() {
         mode=container
       fi
     fi
+  fi
+
+  if [[ "$mode" == remote && "$ROOT" == 1 ]]; then
+    die "--root is not supported in remote mode (the daemon refuses to run as root); use --mode container"
   fi
 
   if [[ "$mode" == remote ]]; then
@@ -1294,6 +1345,8 @@ cmd_run() {
     ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile" 2>/dev/null || true
     local -a tty=()
     have_tty && tty=(-it)
+    local -a rootargs=()
+    [[ "$ROOT" == 1 ]] && rootargs=(--user 0:0 -e HOME=/home/node)
     local sbase sessions_target store
     sbase="$(session_base)"; sessions_target="/home/node/.pi/sessions"
     store="$(pnpm_store)"
@@ -1305,7 +1358,7 @@ cmd_run() {
     envmount+=(-v "$store:/home/node/.cache/pisbx/pnpm-store")
     info "running pi inside a container in VM '$LIMA_NAME'"
     warn "note: VM mode passes the credential to the guest; prefer --runtime docker for tighter key isolation"
-    limactl shell "$LIMA_NAME" -- docker run --rm ${tty[@]+"${tty[@]}"} ${envmount[@]+"${envmount[@]}"} \
+    limactl shell "$LIMA_NAME" -- docker run --rm ${tty[@]+"${tty[@]}"} ${rootargs[@]+"${rootargs[@]}"} ${envmount[@]+"${envmount[@]}"} \
       -v "$(workspace_src):/workspace" -v "$sbase:$sessions_target" -v pisbx-home:/home/node/.pi \
       "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"}
     return $?
@@ -1367,9 +1420,14 @@ cmd_run() {
   envmount+=(-v "$store:/home/node/.cache/pisbx/pnpm-store" -e "PISBX_PNPM_STORE=/home/node/.cache/pisbx/pnpm-store")
   local -a tty=()
   have_tty && tty=(-it)
+  local -a rootargs=()
+  if [[ "$ROOT" == 1 ]]; then
+    rootargs=(--user 0:0 -e HOME=/home/node)
+    warn "running as root inside the container; tools can install packages"
+  fi
   info "running the whole pi process in the container"
   skey run --no-redact "$provider" "$variant" --env "$envvar" -y -- \
-    docker run --rm ${tty[@]+"${tty[@]}"} --label pisbx=1 --init \
+    docker run --rm ${tty[@]+"${tty[@]}"} ${rootargs[@]+"${rootargs[@]}"} --label pisbx=1 --init \
       --cap-drop=ALL --security-opt=no-new-privileges \
       -e "$envvar" \
       -v "$(workspace_src):/workspace" \
@@ -1801,6 +1859,8 @@ COMMANDS
                                  container (default: auto)
                                  native = your own pi and config, no sandbox
       --no-extensions            do not load extensions (quiet sandboxed runs)
+      --root                     run the container as root so tools can install
+                                 packages (not available in remote mode)
       --session-mode ask|continue|new
                                  ask (default) prompts when the folder has
                                  sessions; continue passes -c; new starts fresh

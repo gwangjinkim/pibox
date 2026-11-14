@@ -174,6 +174,22 @@ pisbx sync                  # rebuild the environment from the lock
 
 See [environment.md](environment.md).
 
+## 3c. Toolchains
+
+| Image | Contains | Use when |
+|---|---|---|
+| `--minimal` (155 MB) | pi, bash/busybox, git, ripgrep, fd, curl | read/edit/run simple commands |
+| `standard` (733 MB) | + python3, make, g++, node/npm, jq | build/test projects |
+
+Nothing is installed as root by default. For runtime installs in `container` mode:
+
+```bash
+pisbx run --mode container --root --model provider/model   # then: apk add ...
+```
+
+Images include `/home/node/.pi/AGENTS.md`, so the model knows it is on Alpine and
+uses `apk` (verified with DeepSeek V4.1 Flash).
+
 ## 4. Run
 
 ```bash

@@ -87,6 +87,8 @@ manifest, and re-syncs the environment.
 Writes `~/.config/pisbx/docker/Dockerfile` and `Dockerfile.sandbox`, then builds
 `pisbx-full` and `pisbx-sandbox`.
 
+`bootstrap` always rebuilds (cached layers are reused).
+
 `--minimal` builds `pisbx-full-min` and `pisbx-sandbox-min`: Alpine + a
 Bun-compiled single pi binary (~155 MB each instead of ~730 MB). The choice is
 stored as `defaults.variant`; `PISBX_VARIANT` overrides it, and `PISBX_IMAGE` /
@@ -144,6 +146,7 @@ Steps:
 | `--dry-run` | off | print the plan; do not read a secret or start anything |
 | `--force` | off | allow mounting `$HOME` or `/` as the workspace |
 | `--no-extensions` | off | pass `--no-extensions` to pi |
+| `--root` | off | run the container as root (container mode only) so tools can install packages |
 
 ### Mode selection
 

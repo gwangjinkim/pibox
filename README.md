@@ -314,6 +314,33 @@ If a command fails, the exact manual steps for that dependency are printed and
 the installer continues with the next one. In a non-interactive shell it prints
 the steps instead of running anything.
 
+### Toolchains and runtime installs
+
+| | `--minimal` (155 MB) | `standard` (733 MB) |
+|---|---|---|
+| base | Alpine | Debian bookworm |
+| pi | single Bun binary | npm install |
+| shell | bash + busybox | bash + coreutils |
+| git / ripgrep / fd / curl | yes | yes |
+| python3 / make / g++ | **no** | yes |
+| node / npm | **no** | yes |
+| jq | **no** | yes |
+| runs as | uid 1000 | uid 1000 |
+
+The agent cannot install system packages by default. In `container` mode you can
+grant that with `--root`:
+
+```bash
+pisbx run --mode container --root --model provider/model
+# inside: apk add --no-cache python3
+```
+
+`--root` is rejected in `remote` mode (the daemon refuses root).
+
+Both images ship `/home/node/.pi/AGENTS.md` describing the environment, so the
+model knows whether to use `apk` or `apt-get`. Verified with DeepSeek V4.1 Flash:
+it detected Alpine, used `apk`, installed `python3`, and verified it.
+
 ### `./install.sh --check` (install nothing)
 
 Reports what is present and what is missing, with the exact commands for your OS.
@@ -444,6 +471,7 @@ Writes `~/.config/pisbx/docker/Dockerfile{,.sandbox}` and builds both images.
 | `--minimal` | ~155 MB | `alpine` + Bun-compiled binary | slower build, no compilers |
 
 The variant is stored in config; `PISBX_VARIANT=minimal` overrides it.
+`bootstrap` always rebuilds; unchanged layers come from the build cache.
 
 Why it exists: the upstream default sandbox image is not publicly pullable, and
 building from a pinned `PI_VERSION` makes the environment reproducible.
