@@ -11,6 +11,13 @@ install -m 0755 "$here/pisbx" "$target"
 
 cfg_dir="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 mkdir -p "$cfg_dir"
+if [ -f "$cfg_dir/install.json" ] && command -v jq >/dev/null 2>&1; then
+  prev="$(jq -r '.repo // empty' "$cfg_dir/install.json" 2>/dev/null || true)"
+  if [ -n "$prev" ] && [ "$prev" != "$here" ]; then
+    printf 'note:      update will now track %s\n' "$here"
+    printf '           (previously %s)\n' "$prev"
+  fi
+fi
 if command -v jq >/dev/null 2>&1; then
   jq -n --arg repo "$here" --arg version "$("$here/pisbx" version)" \
      --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -39,4 +46,20 @@ if [[ "$missing" == 1 ]]; then
   exit 0
 fi
 
-printf '\nnext:\n  pisbx init --dry-run   # see which providers would be registered\n  pisbx init             # register them in the OS keyring\n  pisbx doctor\n  pisbx bootstrap        # build the sandbox images\n'
+cat <<'NEXT'
+
+next:
+  pisbx bootstrap          # build the sandbox images (required once)
+  pisbx init --dry-run     # see which providers would be registered
+  pisbx init               # register them in the OS keyring
+  pisbx doctor             # verify dependencies, keys, permissions
+
+  cd ~/code/my-project
+  pisbx run --model provider/model
+
+  pisbx update --check     # later: check for a newer commit
+  pisbx update             # pull, reinstall, rebuild images
+
+docs: https://github.com/gwangjinkim/pisbx/tree/main/docs
+NEXT
+
