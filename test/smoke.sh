@@ -25,4 +25,20 @@ check "no literal key patterns in tracked files" bash -c "
       '$here' --exclude-dir=.git --exclude='*.md' --exclude='*.backup.*'
 "
 
+# every command must be discoverable from the short help
+commands="$("$bin" help | awk '/^COMMANDS/{f=1;next} f&&/^  [a-z]/{print $1}' | sort -u)"
+for c in init migrate bootstrap update doctor run vm version help; do
+  if grep -qx "$c" <<<"$commands"; then
+    printf 'ok   help lists %s\n' "$c"
+  else
+    printf 'FAIL help is missing %s\n' "$c"; fail=1
+  fi
+done
+
+# aliases and alternate entry points
+for inv in "--help" "-h" "help"; do
+  check "help via $inv" bash -c "'$bin' $inv | grep -q '^COMMANDS'"
+done
+check "version" bash -c "'$bin' version | grep -Eq '^[0-9]+\.'"
+
 exit "$fail"

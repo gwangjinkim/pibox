@@ -794,43 +794,74 @@ cmd_help() {
   cat <<EOF
 pisbx $PISBX_VERSION - pi with keys in the OS keyring, tools in a container or VM
 
-  pisbx init [--dry-run] [--register]
+USAGE
+  pisbx <command> [options]
+
+COMMANDS
+  init [--dry-run] [--register]
       Read ~/.pi/agent/auth.json and register each provider's key in the
       keyring via skey. Never prints a key.
 
-  pisbx migrate [--dry-run]
-      Back up auth.json and remove its plaintext api_key entries. OAuth
-      entries are preserved. Rollback is printed.
+  migrate [--dry-run]
+      Back up auth.json and remove plaintext keys and dead !command
+      references. Keeps \$ENV references and OAuth entries.
 
-  pisbx bootstrap
+  bootstrap
       Write config/docker/Dockerfile{,.sandbox} and build both images.
+      Required once before the first run.
 
-  pisbx doctor
-      Dependencies, keyring contents, permissions, and plaintext-key warnings.
+  update [--check] [--no-bootstrap] [--force]
+      Git pull the clone recorded at install time, refresh
+      ~/.local/bin/pisbx, and rebuild the images. Alias: upgrade.
 
-  pisbx vm status|start|stop|delete|shell
-      Manage the Lima VM.
+  doctor
+      Dependencies, keyring contents, permissions, and plaintext-key
+      warnings. Exits non-zero when a security check fails.
 
-  pisbx run --model provider/model [options] -- [pi args]
+  run --model provider/model [options] [-- pi args]
       Resolve the provider to its environment variable, fetch the secret
       from the keyring, pick a runtime, and launch pi.
 
-      --runtime docker|lima     where tools execute (default: docker)
-      --mode remote|container   remote = orchestrate on host, tools in
-                                container (default: auto)
+      --runtime docker|lima      where tools execute (default: docker)
+      --mode remote|container    remote = orchestrate on host, tools in
+                                 container (default: auto)
       --session-mode ask|continue|new
-                                ask (default) prompts when the folder already
-                                has sessions; continue passes -c; new starts fresh
-      --force                   allow mounting \$HOME or / as workspace
-      --dry-run                 show the plan without starting anything
+                                 ask (default) prompts when the folder has
+                                 sessions; continue passes -c; new starts fresh
+      --force                    allow mounting \$HOME or / as workspace
+      --dry-run                  show the plan without starting anything
 
-  Everything after the known flags is passed to pi, e.g.:
-      pisbx run --model opencode-go/muse-spark-1.3-contributor -p "hi"
+  vm status|start|stop|delete|shell
+      Manage the Lima VM used by --runtime lima.
 
-  Configuration: \$PISBX_CONFIG_DIR (default ~/.config/pisbx)
+  version
+      Print the version.
+
+  help
+      Show this help.
+
+EXAMPLES
+  pisbx bootstrap
+  pisbx init
+  pisbx run --model opencode-go/muse-spark-1.3-contributor
+  pisbx run --model anthropic/claude-sonnet-4 -p "explain this repo"
+  pisbx run --model opencode-go/muse-spark-1.3-contributor --session-mode new
+  pisbx update --check
+  pisbx vm status
+
+  Everything after the known flags is passed to pi.
+
+ENVIRONMENT
+  PISBX_CONFIG_DIR       config, images, install metadata (default ~/.config/pisbx)
+  PISBX_IMAGE            sandbox image (default pisbx-sandbox)
+  PISBX_IMAGE_FULL       full image (default pisbx-full)
+  PISBX_SANDBOX_PI       host pi binary that supports --remote
+  PISBX_LIMA_NAME        Lima instance (default pisbx)
+  PISBX_SESSION_MODE     default for --session-mode
+  PISBX_NO_EXTENSIONS=1  pass --no-extensions in remote mode
+  PISBX_REPO             override the clone path used by update
 EOF
 }
-
 main() {
   local sub="${1:-help}"; shift || true
   case "$sub" in
