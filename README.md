@@ -231,6 +231,20 @@ pisbx doctor     # dependencies, keyring contents, permissions, plaintext-key wa
 pisbx bootstrap  # write Dockerfiles into ~/.config/pisbx/docker and build both images
 ```
 
+### Updating
+
+`install.sh` records the clone location in `~/.config/pisbx/install.json`. After that:
+
+```bash
+pisbx update --check   # show whether a newer commit exists
+pisbx update           # git pull, refresh ~/.local/bin/pisbx, rebuild images
+pisbx update --no-bootstrap   # pull + reinstall, keep existing images
+```
+
+`update` refuses to run on a dirty checkout unless you pass `--force`. It uses
+`git pull --ff-only`, so it never creates merge commits. If you installed by
+copying the script without a clone, set `PISBX_REPO=/path/to/pisbx`.
+
 ### Install per OS
 
 | Host | Docker | VM |

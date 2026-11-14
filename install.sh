@@ -9,6 +9,16 @@ target="$bin_dir/pisbx"
 mkdir -p "$bin_dir"
 install -m 0755 "$here/pisbx" "$target"
 
+cfg_dir="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
+mkdir -p "$cfg_dir"
+if command -v jq >/dev/null 2>&1; then
+  jq -n --arg repo "$here" --arg version "$("$here/pisbx" version)" \
+     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+     '{repo:$repo, version:$version, installed_at:$at}' >"$cfg_dir/install.json"
+  chmod 600 "$cfg_dir/install.json"
+  printf 'repo:      %s\n' "$here"
+fi
+
 printf 'installed: %s\n\n' "$target"
 
 missing=0

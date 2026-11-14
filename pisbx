@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-PISBX_VERSION="0.1.0"
+PISBX_VERSION="0.2.0"
 CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -191,6 +191,22 @@ EOF
   }
 }
 
+
+# ---------- install metadata ----------
+meta_path() { printf '%s' "$CFG_DIR/install.json"; }
+meta_repo() {
+  local p; p="$(meta_path)"
+  [[ -f "$p" ]] || return 1
+  jq -er '.repo // empty' "$p" 2>/dev/null
+}
+write_meta() {
+  local repo="$1"
+  ensure_cfg
+  local tmp; tmp="$(meta_path).tmp.$$"
+  jq -n --arg repo "$repo" --arg version "$PISBX_VERSION" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{repo:$repo, version:$version, installed_at:$at}' >"$tmp"
+  chmod 600 "$tmp"; mv "$tmp" "$(meta_path)"
+}
 
 # ---------- sessions ----------
 session_base() {
@@ -706,6 +722,74 @@ cmd_vm() {
   esac
 }
 
+
+cmd_update() {
+  local check=0 bootstrap=1 force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --check) check=1; shift ;;
+      --no-bootstrap) bootstrap=0; shift ;;
+      --force) force=1; shift ;;
+      *) die "update: unknown option $1" ;;
+    esac
+  done
+
+  need_cmd git git || die "git is required for updates"
+  local repo
+  repo="${PISBX_REPO:-$(meta_repo || true)}"
+  if [[ -z "$repo" ]]; then
+    die "no install metadata found; re-run install.sh from your clone once, or set PISBX_REPO=/path/to/pisbx"
+  fi
+  [[ -d "$repo/.git" ]] || die "'$repo' is not a git checkout (set PISBX_REPO)"
+  [[ -f "$repo/pisbx" && -f "$repo/install.sh" ]] || die "'$repo' does not look like the pisbx repository"
+
+  info "repository: $repo"
+  local before after
+  before="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+  if ! git -C "$repo" fetch --quiet 2>/dev/null; then
+    die "git fetch failed (check network/remotes)"
+  fi
+  after="$(git -C "$repo" rev-parse --short '@{u}' 2>/dev/null || echo unknown)"
+
+  if [[ "$check" == 1 ]]; then
+    if [[ "$before" == "$after" ]]; then
+      info "up to date ($before)"
+    else
+      info "update available: $before -> $after"
+      git -C "$repo" log --oneline "$before..@{u}" 2>/dev/null | head -n 10 | while IFS= read -r l; do dim "$l"; done
+      dim "apply with: pisbx update"
+    fi
+    return 0
+  fi
+
+  if [[ "$force" != 1 && -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]]; then
+    die "the checkout has local changes; commit/stash them, or re-run with --force"
+  fi
+
+  info "pulling"
+  git -C "$repo" pull --ff-only >&2 || die "git pull --ff-only failed"
+  after="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  if [[ "$before" == "$after" ]]; then
+    info "already at $after"
+  else
+    info "updated $before -> $after"
+  fi
+
+  info "refreshing the installed script"
+  "$repo/install.sh" >/dev/null || die "install.sh failed"
+  write_meta "$repo"
+
+  if [[ "$bootstrap" == 1 ]]; then
+    info "rebuilding images (bootstrap)"
+    "$repo/pisbx" bootstrap
+  else
+    dim "skipped bootstrap (--no-bootstrap)"
+  fi
+
+  info "done: $(~/.local/bin/pisbx version 2>/dev/null || echo "$PISBX_VERSION")"
+}
+
 cmd_help() {
   cat <<EOF
 pisbx $PISBX_VERSION - pi with keys in the OS keyring, tools in a container or VM
@@ -754,6 +838,7 @@ main() {
     migrate) cmd_migrate "$@" ;;
     doctor) cmd_doctor "$@" ;;
     bootstrap) cmd_bootstrap "$@" ;;
+    update|upgrade) cmd_update "$@" ;;
     run) cmd_run "$@" ;;
     vm) cmd_vm "$@" ;;
     _launch) cmd_launch "$@" ;;
