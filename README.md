@@ -316,16 +316,21 @@ the steps instead of running anything.
 
 ### Toolchains and runtime installs
 
-| | `--minimal` (155 MB) | `standard` (733 MB) |
-|---|---|---|
-| base | Alpine | Debian bookworm |
-| pi | single Bun binary | npm install |
-| shell | bash + busybox | bash + coreutils |
-| git / ripgrep / fd / curl | yes | yes |
-| python3 / make / g++ | **no** | yes |
-| node / npm | **no** | yes |
-| jq | **no** | yes |
-| runs as | uid 1000 | uid 1000 |
+| | `--minimal` (155 MB) | `--dev` (~650 MB) | `standard` (733 MB) |
+|---|---|---|---|
+| base | Alpine | Alpine | Debian bookworm |
+| pi | single Bun binary | single Bun binary | npm install |
+| shell | bash + busybox | bash + busybox | bash + coreutils |
+| git / curl | yes | yes | yes |
+| python3 + pip | **no** | yes | yes |
+| uv | **no** | yes | **no** |
+| node + npm | **no** | yes | yes |
+| pnpm / yarn | **no** | yes | **no** |
+| typescript / tsx | **no** | yes | **no** |
+| gcc / g++ / make | **no** | yes | yes |
+| jq | **no** | yes | yes |
+| Rust CLI tools | rg, fd | rg, fd, bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide, just | rg, fd |
+| runs as | uid 1000 | uid 1000 | uid 1000 |
 
 The agent cannot install system packages by default. In `container` mode you can
 grant that with `--root`:

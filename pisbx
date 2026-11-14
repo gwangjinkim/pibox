@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-PISBX_VERSION="0.6.1"
+PISBX_VERSION="0.7.1"
 CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -441,6 +441,9 @@ resolve_images() {
   if [[ "$v" == minimal ]]; then
     IMAGE="${PISBX_IMAGE:-pisbx-sandbox-min}"
     IMAGE_FULL="${PISBX_IMAGE_FULL:-pisbx-full-min}"
+  elif [[ "$v" == dev ]]; then
+    IMAGE="${PISBX_IMAGE:-pisbx-sandbox-dev}"
+    IMAGE_FULL="${PISBX_IMAGE_FULL:-pisbx-full-dev}"
   else
     IMAGE="${PISBX_IMAGE:-pisbx-sandbox}"
     IMAGE_FULL="${PISBX_IMAGE_FULL:-pisbx-full}"
@@ -967,6 +970,7 @@ cmd_bootstrap() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --minimal|--alpine) variant="minimal"; shift ;;
+      --dev|--toolchain) variant="dev"; shift ;;
       --standard) variant="standard"; shift ;;
       *) die "bootstrap: unknown option $1" ;;
     esac
@@ -1050,6 +1054,104 @@ ENV HOME=/home/node \
     PI_DAEMON_TEMP_ROOT=/tmp \
     TMPDIR=/tmp \
     PI_DAEMON_ALLOW_INSECURE_TRANSPORT=1 \
+    PI_DAEMON_ALLOW_PROCESS_EXEC=1
+EXPOSE 8787
+WORKDIR /workspace
+USER node
+ENTRYPOINT ["pi"]
+CMD ["--daemon"]
+DOCKER
+  elif [[ "$variant" == dev ]]; then
+    image_sandbox="pisbx-sandbox-dev"
+    image_full="pisbx-full-dev"
+    df_sandbox="$DOCKER_DIR/Dockerfile.sandbox.dev"
+    df_full="$DOCKER_DIR/Dockerfile.dev"
+
+    dev_note='RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'"'"'EOF'"'"'
+# Sandbox environment
+
+- Alpine Linux. Use apk, not apt-get.
+- Preinstalled runtimes: python3, pip, uv, node, npm, pnpm, yarn, typescript,
+  tsx, gcc, g++, make.
+- Prefer modern Rust CLI tools over busybox/GNU equivalents:
+  rg (grep), fd (find), bat (cat), sd (sed), eza (ls), dust (du),
+  procs (ps), btm (top), delta (diff), hyperfine (time), tokei (loc),
+  hexyl (hex), zoxide.
+- Python: `python3`, `uv` for fast installs and venvs, or `pip install --user`.
+- Node/TS: `node`, `npm`, `pnpm`, `yarn`, `tsc`, `tsx`.
+- The project is mounted at /workspace; it is the only host path you can reach.
+- You run as uid 1000; system packages need --root and: apk add --no-cache <pkg>
+EOF'
+
+    cat >"$df_full" <<DOCKER
+FROM oven/bun:1-alpine AS build
+RUN apk add --no-cache nodejs npm
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2
+WORKDIR /usr/local/lib/node_modules/@earendil-works/pi-coding-agent
+RUN bun build --compile --minify ./dist/bun/cli.js --outfile /out/pi \\
+    || bun build --compile --minify ./dist/cli.js --outfile /out/pi
+RUN mkdir -p /out/dist \\
+    && (cp -R dist/core /out/dist/ 2>/dev/null || true) \\
+    && (cp -R dist/modes /out/dist/ 2>/dev/null || true) \\
+    && (cp "\$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \\
+    && cp package.json /out/
+FROM alpine:3.20
+RUN --mount=type=cache,target=/var/cache/apk \
+    apk update && apk add bash ca-certificates curl git ripgrep fd libstdc++ \
+      jq less python3 py3-pip nodejs npm build-base \
+      bat eza sd dust procs bottom delta hyperfine tokei watchexec hexyl zoxide just
+RUN python3 -m pip install --break-system-packages --no-cache-dir uv \
+    && npm install -g pnpm yarn typescript tsx \
+    && npm cache clean --force
+RUN adduser -D -u 1000 -h /home/node node
+RUN mkdir -p /home/node/.pi /home/node/.npm-global && chown -R 1000:1000 /home/node
+$dev_note
+COPY --from=build /out /opt/pi
+RUN ln -s /opt/pi/pi /usr/local/bin/pi
+ENV HOME=/home/node TERM=xterm-256color \\
+    NPM_CONFIG_PREFIX=/home/node/.npm-global \\
+    PIP_BREAK_SYSTEM_PACKAGES=1 \\
+    PATH=/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /workspace
+USER node
+ENTRYPOINT ["pi"]
+DOCKER
+
+    cat >"$df_sandbox" <<DOCKER
+FROM oven/bun:1-alpine AS build
+RUN apk add --no-cache nodejs npm
+RUN npm install -g --ignore-scripts @fleetagent/pi-coding-agent@0.2.15
+WORKDIR /usr/local/lib/node_modules/@fleetagent/pi-coding-agent
+RUN bun build --compile --minify ./dist/bun/cli.js --outfile /out/pi \\
+    || bun build --compile --minify ./dist/cli.js --outfile /out/pi
+RUN mkdir -p /out/dist \\
+    && (cp -R dist/core /out/dist/ 2>/dev/null || true) \\
+    && (cp -R dist/modes /out/dist/ 2>/dev/null || true) \\
+    && (cp "\$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \\
+    && cp package.json /out/
+FROM alpine:3.20
+RUN --mount=type=cache,target=/var/cache/apk \
+    apk update && apk add bash ca-certificates curl git ripgrep fd libstdc++ \
+      jq less python3 py3-pip nodejs npm build-base \
+      bat eza sd dust procs bottom delta hyperfine tokei watchexec hexyl zoxide just
+RUN python3 -m pip install --break-system-packages --no-cache-dir uv \
+    && npm install -g pnpm yarn typescript tsx \
+    && npm cache clean --force
+RUN adduser -D -u 1000 -h /home/node node
+RUN mkdir -p /home/node/.pi /home/node/.npm-global && chown -R 1000:1000 /home/node
+$dev_note
+COPY --from=build /out /opt/pi
+RUN ln -s /opt/pi/pi /usr/local/bin/pi
+ENV HOME=/home/node \\
+    NPM_CONFIG_PREFIX=/home/node/.npm-global \\
+    PIP_BREAK_SYSTEM_PACKAGES=1 \\
+    PATH=/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \\
+    PI_DAEMON_HOST=0.0.0.0 \\
+    PI_DAEMON_PORT=8787 \\
+    PI_DAEMON_CWD=/workspace \\
+    PI_DAEMON_TEMP_ROOT=/tmp \\
+    TMPDIR=/tmp \\
+    PI_DAEMON_ALLOW_INSECURE_TRANSPORT=1 \\
     PI_DAEMON_ALLOW_PROCESS_EXEC=1
 EXPOSE 8787
 WORKDIR /workspace
@@ -1835,11 +1937,13 @@ COMMANDS
       prompts), and auth.json entries. Writes pisbx.toml / pisbx.lock
       and builds .pisbx/env.
 
-  bootstrap [--minimal|--standard]
+  bootstrap [--minimal|--dev|--standard]
       Write config/docker/Dockerfile{,.sandbox} and build both images.
       Required once before the first run.
-      --minimal builds Alpine + Bun-compiled single-binary images
-      (~155MB instead of ~730MB). Slower to build, smaller to pull.
+      --minimal  Alpine + single binary, no toolchain (~155MB)
+      --dev      Alpine + single binary + python3/uv, node/npm/pnpm/yarn,
+                 typescript/tsx, gcc/make, Rust CLI tools (~650MB)
+      --standard Debian + full toolchain (~730MB)
 
   update [--check] [--no-bootstrap] [--force]
       Git pull the clone recorded at install time, refresh

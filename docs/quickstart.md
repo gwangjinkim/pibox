@@ -178,8 +178,9 @@ See [environment.md](environment.md).
 
 | Image | Contains | Use when |
 |---|---|---|
-| `--minimal` (155 MB) | pi, bash/busybox, git, ripgrep, fd, curl | read/edit/run simple commands |
-| `standard` (733 MB) | + python3, make, g++, node/npm, jq | build/test projects |
+| `--minimal` (155 MB) | pi, bash/busybox, git, rg, fd, curl | read/edit/run simple commands |
+| `--dev` (~650 MB) | + python3/pip/uv, node/npm/pnpm/yarn, typescript/tsx, gcc/g++/make, and Rust CLI tools (bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide, just) | real development |
+| `standard` (733 MB) | Debian + python3, make, g++, node/npm, jq | when you need glibc/Debian |
 
 Nothing is installed as root by default. For runtime installs in `container` mode:
 

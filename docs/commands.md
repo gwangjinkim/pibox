@@ -89,6 +89,11 @@ Writes `~/.config/pisbx/docker/Dockerfile` and `Dockerfile.sandbox`, then builds
 
 `bootstrap` always rebuilds (cached layers are reused).
 
+`--dev` builds `pisbx-full-dev` and `pisbx-sandbox-dev`: Alpine plus python3/pip/uv,
+node/npm/pnpm/yarn, typescript/tsx, gcc/g++/make, and modern Rust CLI tools
+(rg, fd, bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide,
+just).
+
 `--minimal` builds `pisbx-full-min` and `pisbx-sandbox-min`: Alpine + a
 Bun-compiled single pi binary (~155 MB each instead of ~730 MB). The choice is
 stored as `defaults.variant`; `PISBX_VARIANT` overrides it, and `PISBX_IMAGE` /
