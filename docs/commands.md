@@ -1,15 +1,15 @@
 # Command reference
 
-`pisbx` has one job: map a model to a credential, then run `pi` in a bounded
+`pibox` has one job: map a model to a credential, then run `pi` in a bounded
 runtime. Everything here follows from that.
 
 ```
-pisbx <command> [options]
+pibox <command> [options]
 ```
 
 ---
 
-## `pisbx init [--dry-run] [--register]`
+## `pibox init [--dry-run] [--register]`
 
 Reads `~/.pi/agent/auth.json` (or `$PI_CODING_AGENT_DIR/auth.json`) and registers
 every `api_key` provider in the OS keyring through `skey`.
@@ -30,7 +30,7 @@ Classification:
 
 ---
 
-## `pisbx migrate [--dry-run] [--register] [--no-sync] [--keep-auth]`
+## `pibox migrate [--dry-run] [--register] [--no-sync] [--keep-auth]`
 
 Adopts the global pi setup into the current project.
 
@@ -42,39 +42,39 @@ Inventory:
   `themes/`, `statusline/`
 - all `auth.json` entries, classified
 
-Output: `pisbx.toml`, `pisbx.lock`, `.pisbx/env`.
+Output: `pibox.toml`, `pibox.lock`, `.pibox/env`.
 
 | Option | Effect |
 |---|---|
 | `--dry-run` | print the inventory only |
 | `--register` | register missing providers in the keyring |
-| `--no-sync` | skip building `.pisbx/env` |
+| `--no-sync` | skip building `.pibox/env` |
 | `--keep-auth` | leave `auth.json` untouched |
 
 `auth.json` is backed up before rewriting; rollback is printed.
 
-## `pisbx export [--global]`
+## `pibox export [--global]`
 
-Snapshot package versions into `pisbx.toml` and `pisbx.lock`. By default it reads
+Snapshot package versions into `pibox.toml` and `pibox.lock`. By default it reads
 the project environment if one exists, otherwise the global agent directory.
 
-## `pisbx sync`
+## `pibox sync`
 
-Recreate `.pisbx/env` from the manifest and lock using pnpm:
+Recreate `.pibox/env` from the manifest and lock using pnpm:
 
 - writes `npm/package.json` with exact versions
 - writes `.npmrc` with `auto-install-peers=false`, `strict-peer-dependencies=false`,
   `ignore-scripts=true`
-- installs from `~/.cache/pisbx/pnpm-store`
-- copies the resulting `pnpm-lock.yaml` to `pisbx.pnpm-lock.yaml` for transitive
+- installs from `~/.cache/pibox/pnpm-store`
+- copies the resulting `pnpm-lock.yaml` to `pibox.pnpm-lock.yaml` for transitive
   reproducibility
 
-## `pisbx add` / `pisbx remove`
+## `pibox add` / `pibox remove`
 
 ```bash
-pisbx add pi-effort                 # shorthand for npm:pi-effort
-pisbx add @scope/pkg@1.2.3
-pisbx remove npm:pi-effort
+pibox add pi-effort                 # shorthand for npm:pi-effort
+pibox add @scope/pkg@1.2.3
+pibox remove npm:pi-effort
 ```
 
 `add` resolves the current version when omitted, updates the lock, rewrites the
@@ -82,7 +82,7 @@ manifest, and re-syncs the environment.
 
 ---
 
-## `pisbx bootstrap [--with LIST | --minimal | --dev | --standard]`
+## `pibox bootstrap [--with LIST | --minimal | --dev | --standard]`
 
 Builds both images. Features can be combined:
 
@@ -96,17 +96,17 @@ Builds both images. Features can be combined:
 | cli | tools | bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide, just |
 
 ```bash
-pisbx bootstrap --with node,rust,build
-pisbx bootstrap --minimal        # none
-pisbx bootstrap --dev            # all
-pisbx bootstrap --standard       # Debian
+pibox bootstrap --with node,rust,build
+pibox bootstrap --minimal        # none
+pibox bootstrap --dev            # all
+pibox bootstrap --standard       # Debian
 ```
 
-Image names include the selection, e.g. `pisbx-full-dev-js-rs-cc`. The choice is
+Image names include the selection, e.g. `pibox-full-dev-js-rs-cc`. The choice is
 stored as `defaults.variant=alpine`, `defaults.features`, `defaults.image`, and
-`defaults.image_full`; `PISBX_IMAGE` / `PISBX_IMAGE_FULL` override the tags.
+`defaults.image_full`; `PIBOX_IMAGE` / `PIBOX_IMAGE_FULL` override the tags.
 
-## `pisbx doctor`
+## `pibox doctor`
 
 Prints:
 
@@ -120,7 +120,7 @@ Exit code is non-zero when a security check fails, so it is usable in CI.
 
 ---
 
-## `pisbx update [--check] [--no-bootstrap] [--force]`
+## `pibox update [--check] [--no-bootstrap] [--force]`
 
 | Option | Effect |
 |---|---|
@@ -130,16 +130,16 @@ Exit code is non-zero when a security check fails, so it is usable in CI.
 
 Steps:
 
-1. read the clone path from `~/.config/pisbx/install.json` (override with `PISBX_REPO`)
+1. read the clone path from `~/.config/pibox/install.json` (override with `PIBOX_REPO`)
 2. `git fetch`, then `git pull --ff-only`
-3. run `install.sh` to refresh `~/.local/bin/pisbx`
-4. run `pisbx bootstrap` unless `--no-bootstrap`
+3. run `install.sh` to refresh `~/.local/bin/pibox`
+4. run `pibox bootstrap` unless `--no-bootstrap`
 
 `upgrade` is an alias.
 
 ---
 
-## `pisbx run --model <provider>/<model> [options] [-- <pi args>]`
+## `pibox run --model <provider>/<model> [options] [-- <pi args>]`
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -157,12 +157,12 @@ Steps:
 
 `--mode auto` (default):
 
-- if the project has `pisbx.toml` → `container` (project environment is mounted)
+- if the project has `pibox.toml` → `container` (project environment is mounted)
 - otherwise `remote` when the sandbox `pi` supports `--remote`
 - otherwise `container`
 
 If remote is selected but your global `settings.json` lists packages that import
-`@earendil-works/*`, `pisbx` refuses to start and prints three options (container
+`@earendil-works/*`, `pibox` refuses to start and prints three options (container
 with migrate, native, or `--no-extensions`). This replaces a wall of extension
 load errors.
 
@@ -175,7 +175,7 @@ load errors.
         └── provider → OPENCODE_API_KEY → keyring variant
 ```
 
-If the folder has sessions and you did not pass a session flag, `pisbx` asks:
+If the folder has sessions and you did not pass a session flag, `pibox` asks:
 
 ```
 [Enter] continue last   [n] new session   [q] quit
@@ -206,19 +206,19 @@ TUI can differ. Use `--mode native` when you need the exact setup.
 Everything unrecognized, and everything after `--`, goes to `pi`:
 
 ```bash
-pisbx run --model opencode-go/muse-spark-1.3-contributor -p "explain this repo"
-pisbx run --model anthropic/claude-sonnet-4 -- -c
+pibox run --model opencode-go/muse-spark-1.3-contributor -p "explain this repo"
+pibox run --model anthropic/claude-sonnet-4 -- -c
 ```
 
 ---
 
-## `pisbx recover [--fix]`
+## `pibox recover [--fix]`
 
 Diagnoses state left behind by a crash:
 
-- running and stopped `pisbx-*` containers (labelled `pisbx=1`)
-- stale temp agent dirs older than 10 minutes (`.pisbx.*` under `$TMPDIR` and `/tmp`)
-- git worktrees under `.pisbx/work/`
+- running and stopped `pibox-*` containers (labelled `pibox=1`)
+- stale temp agent dirs older than 10 minutes (`.pibox.*` under `$TMPDIR` and `/tmp`)
+- git worktrees under `.pibox/work/`
 - an incomplete environment (lock lists extensions, `env/npm` missing)
 - session count for the current folder
 
@@ -229,26 +229,26 @@ Diagnoses state left behind by a crash:
 - removes clean worktrees (branches are never deleted)
 - rebuilds an incomplete environment
 
-## `pisbx clean [--containers] [--tmp] [--work] [--env] [--all] [--force]`
+## `pibox clean [--containers] [--tmp] [--work] [--env] [--all] [--force]`
 
 Targeted cleanup. Default: stopped containers + stale temp dirs.
 
 | Flag | Effect |
 |---|---|
-| `--containers` | remove stopped `pisbx` containers |
+| `--containers` | remove stopped `pibox` containers |
 | `--tmp` | remove stale temp agent dirs |
 | `--work` | prune clean git worktrees |
-| `--env` | delete `.pisbx/env` (rebuild with `pisbx sync`) |
+| `--env` | delete `.pibox/env` (rebuild with `pibox sync`) |
 | `--force` | include running containers |
 | `--all` | all of the above except removing running containers |
 
-## `pisbx sessions list|resume|export`
+## `pibox sessions list|resume|export`
 
 ```bash
-pisbx sessions list
-pisbx sessions resume latest --model opencode-go/muse-spark-1.3-contributor
-pisbx sessions resume 01a1db17 --model provider/model -- -p "continue"
-pisbx sessions export latest out.html
+pibox sessions list
+pibox sessions resume latest --model opencode-go/muse-spark-1.3-contributor
+pibox sessions resume 01a1db17 --model provider/model -- -p "continue"
+pibox sessions export latest out.html
 ```
 
 - `list` shows timestamp, size, and session id for this folder
@@ -259,48 +259,48 @@ pisbx sessions export latest out.html
 Session folders are computed from the **physical** working directory, so `/tmp`
 and `/private/tmp` resolve to the same session directory.
 
-## `pisbx work list|clean`
+## `pibox work list|clean`
 
-- `list` shows worktrees under `.pisbx/work/` and their change count
+- `list` shows worktrees under `.pibox/work/` and their change count
 - `clean` removes worktrees with no changes; worktrees with uncommitted changes are
   kept
 
 ## Git workspace mode
 
-`--workspace git` (or `[workspace] mode = "git"` in `pisbx.toml`):
+`--workspace git` (or `[workspace] mode = "git"` in `pibox.toml`):
 
 1. `git stash create` snapshots tracked dirty changes (no stash entry is added)
-2. `git worktree add --detach .pisbx/work/<session> <snapshot>`
+2. `git worktree add --detach .pibox/work/<session> <snapshot>`
 3. untracked **non-ignored** files are copied; `.gitignore` excludes `.env`
 4. a baseline commit is made so copied files are not reported as agent edits
-5. on exit, changes are committed to branch `pisbx/<session>`
+5. on exit, changes are committed to branch `pibox/<session>`
 
 The live tree is never modified. Review with
-`git diff <base>..pisbx/<session>`, merge with `git merge`, remove with
+`git diff <base>..pibox/<session>`, merge with `git merge`, remove with
 `git worktree remove`.
 
-Requirements: a git repository with at least one commit. Add `.pisbx/` to
+Requirements: a git repository with at least one commit. Add `.pibox/` to
 `.gitignore`.
 
-## `pisbx vm status|start|stop|delete|shell`
+## `pibox vm status|start|stop|delete|shell`
 
 Manages the Lima instance used by `--runtime lima`.
 
 ```bash
-pisbx vm status
-pisbx vm start
-pisbx vm shell -- uname -a
+pibox vm status
+pibox vm start
+pibox vm shell -- uname -a
 ```
 
 If the VM does not exist:
 
 ```bash
-limactl start --name=pisbx --tty=false template:docker-rootful
+limactl start --name=pibox --tty=false template:docker-rootful
 ```
 
 ---
 
-## `pisbx help` / `pisbx version`
+## `pibox help` / `pibox version`
 
 ---
 
@@ -308,19 +308,19 @@ limactl start --name=pisbx --tty=false template:docker-rootful
 
 | Variable | Meaning |
 |---|---|
-| `PISBX_CONFIG_DIR` | config, generated Dockerfiles, `install.json` |
-| `PISBX_VARIANT` | `standard` or `minimal` (image variant) |
-| `PISBX_IMAGE` | sandbox image tag (default `pisbx-sandbox`) |
-| `PISBX_IMAGE_FULL` | whole-container image tag (default `pisbx-full`) |
-| `PISBX_SANDBOX_PI` | host `pi` binary that supports `--remote` |
-| `PISBX_PI` | `pi` binary used by `--mode native` (default: `pi`) |
-| `PISBX_LIMA_NAME` | Lima instance name (default `pisbx`) |
-| `PISBX_SESSION_MODE` | default for `--session-mode` |
-| `PISBX_NO_EXTENSIONS=1` | pass `--no-extensions` in remote mode |
-| `PISBX_REPO` | override the clone path used by `update` |
-| `PISBX_PNPM_STORE` | pnpm store (default `~/.cache/pisbx/pnpm-store`) |
-| `PISBX_OFFLINE=1` | install only from the store |
-| `PISBX_FROZEN=1` | require `pnpm-lock.yaml` to be current |
+| `PIBOX_CONFIG_DIR` | config, generated Dockerfiles, `install.json` |
+| `PIBOX_VARIANT` | `standard` or `minimal` (image variant) |
+| `PIBOX_IMAGE` | sandbox image tag (default `pibox-sandbox`) |
+| `PIBOX_IMAGE_FULL` | whole-container image tag (default `pibox-full`) |
+| `PIBOX_SANDBOX_PI` | host `pi` binary that supports `--remote` |
+| `PIBOX_PI` | `pi` binary used by `--mode native` (default: `pi`) |
+| `PIBOX_LIMA_NAME` | Lima instance name (default `pibox`) |
+| `PIBOX_SESSION_MODE` | default for `--session-mode` |
+| `PIBOX_NO_EXTENSIONS=1` | pass `--no-extensions` in remote mode |
+| `PIBOX_REPO` | override the clone path used by `update` |
+| `PIBOX_PNPM_STORE` | pnpm store (default `~/.cache/pibox/pnpm-store`) |
+| `PIBOX_OFFLINE=1` | install only from the store |
+| `PIBOX_FROZEN=1` | require `pnpm-lock.yaml` to be current |
 | `PI_SESSION_DIR` | override where sessions are discovered |
 | `PI_CODING_AGENT_DIR` | pi agent directory (read-only discovery) |
 
@@ -330,9 +330,9 @@ limactl start --name=pisbx --tty=false template:docker-rootful
 
 | Path | Contents |
 |---|---|
-| `~/.config/pisbx/config.json` | provider → variant → env var (no secrets) |
-| `~/.config/pisbx/install.json` | clone path + install timestamp |
-| `~/.config/pisbx/docker/*.Dockerfile` | generated image recipes |
+| `~/.config/pibox/config.json` | provider → variant → env var (no secrets) |
+| `~/.config/pibox/install.json` | clone path + install timestamp |
+| `~/.config/pibox/docker/*.Dockerfile` | generated image recipes |
 | `~/.pi/agent/sessions/--<cwd>--/*.jsonl` | session history used for the prompt |
 | OS keyring, service `skey` | the secrets themselves |
 

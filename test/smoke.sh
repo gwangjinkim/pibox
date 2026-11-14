@@ -3,7 +3,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-bin="$here/pisbx"
+bin="$here/pibox"
 fail=0
 
 check() {
@@ -18,7 +18,7 @@ check() {
 check "syntax"            bash -n "$bin"
 check "version"           "$bin" version
 check "help"              "$bin" help
-check "help mentions run" bash -c "'$bin' help | grep -q 'pisbx run'"
+check "help mentions run" bash -c "'$bin' help | grep -q 'pibox run'"
 check "dry-run needs model to fail" bash -c "! '$bin' run --dry-run 2>/dev/null"
 check "no literal key patterns in tracked files" bash -c "
   ! grep -rIE 'sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|oc_sk_[A-Za-z0-9]{10,}' \

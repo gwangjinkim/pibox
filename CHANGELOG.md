@@ -26,17 +26,17 @@
 - **Fix: container and lima modes now mount the project environment.** The
   environment was detected and reported but never added to `docker run`, so
   sandboxed container sessions had no extensions installed. Container/lima now
-  mount `.pisbx/env` at `/home/node/.pi/agent`, the pnpm store under
-  `/home/node/.cache/pisbx/pnpm-store`, and sessions inside the mounted env.
+  mount `.pibox/env` at `/home/node/.pi/agent`, the pnpm store under
+  `/home/node/.cache/pibox/pnpm-store`, and sessions inside the mounted env.
 - Verified in a migrated project: `pi list` inside the container shows all 8
   packages under `/home/node/.pi/agent/npm/...` with no extension load errors.
 
 ## 0.5.1
 
-- **Auto mode fix:** a project with `pisbx.toml` now selects `container`, so
+- **Auto mode fix:** a project with `pibox.toml` now selects `container`, so
   `@earendil-works` extensions load from the project environment (verified).
 - **Remote preflight:** when remote would use the `@fleetagent` build while
-  global extensions target `@earendil-works`, `pisbx` stops with three options
+  global extensions target `@earendil-works`, `pibox` stops with three options
   instead of emitting extension load errors.
 - **`--no-extensions`:** run the sandbox without loading extensions.
 - Verified: `mode=container` with a migrated environment loads all 8 extensions;
@@ -44,26 +44,26 @@
 
 ## 0.5.0
 
-- **`pisbx recover [--fix]`:** diagnoses leftover state after a crash
+- **`pibox recover [--fix]`:** diagnoses leftover state after a crash
   (containers, stale temp agent dirs, worktrees, incomplete environment) and
   applies safe cleanup.
-- **`pisbx clean`:** targeted cleanup with `--containers`, `--tmp`, `--work`,
+- **`pibox clean`:** targeted cleanup with `--containers`, `--tmp`, `--work`,
   `--env`, `--all`, `--force`. Running containers are only removed with
   `--force`.
-- **`pisbx sessions list|resume|export`:** inspect, resume by id/latest, and
+- **`pibox sessions list|resume|export`:** inspect, resume by id/latest, and
   export sessions to HTML.
-- Containers are labelled `pisbx=1` so cleanup can never touch unrelated ones.
+- Containers are labelled `pibox=1` so cleanup can never touch unrelated ones.
 - Session folders use the physical path, fixing `/tmp` vs `/private/tmp`.
 
 ## 0.4.0
 
 - **`--workspace git`:** isolates the agent in a git worktree built from a
   snapshot of the dirty tree, copies untracked non-ignored files, excludes
-  `.gitignore` entries such as `.env`, and commits results to `pisbx/<session>`
+  `.gitignore` entries such as `.env`, and commits results to `pibox/<session>`
   on exit. The live tree is never modified.
-- **`pisbx work list|clean`** manages worktrees under `.pisbx/work/`; they are
+- **`pibox work list|clean`** manages worktrees under `.pibox/work/`; they are
   kept after exit, including crashes.
-- `[workspace] mode = "mount"|"git"` in `pisbx.toml`.
+- `[workspace] mode = "mount"|"git"` in `pibox.toml`.
 - `mount` remains the default.
 
 ## 0.3.2
@@ -72,10 +72,10 @@
   interface files (`settings.json`, `mcp.json`, `AGENTS.md`, `SYSTEM.md`,
   `models-store.json`, `extensions/`, `skills/`, `rules/`, `prompt-templates/`,
   `themes/`, `statusline/`), and all `auth.json` entries. Writes
-  `pisbx.toml`/`pisbx.lock` and builds `.pisbx/env`.
+  `pibox.toml`/`pibox.lock` and builds `.pibox/env`.
 - **pnpm-backed environments:** `sync` writes an exact `package.json`, suppresses
   peer auto-install and lifecycle scripts, installs from a shared store, and
-  copies `pnpm-lock.yaml` to `pisbx.pnpm-lock.yaml`.
+  copies `pnpm-lock.yaml` to `pibox.pnpm-lock.yaml`.
 - **Relocatable environments:** interface files are copied into `env/base/` and
   linked relatively, so the environment keeps working when bind-mounted into a
   container or VM.
@@ -92,20 +92,20 @@
 - **Fidelity warning:** remote mode warns when `settings.json` declares packages,
   because the sandbox `pi` build cannot load extensions that import
   `@earendil-works/*`.
-- `PISBX_PI` selects the binary used by native mode.
+- `PIBOX_PI` selects the binary used by native mode.
 
 ## 0.2.0
 
-- **Sessions:** when the working folder already has sessions, `pisbx run` asks
+- **Sessions:** when the working folder already has sessions, `pibox run` asks
   whether to continue the most recent one or start fresh. Skip with
-  `--session-mode continue|new` or `PISBX_SESSION_MODE`.
+  `--session-mode continue|new` or `PIBOX_SESSION_MODE`.
 - **Session sharing:** `container` and `lima` modes now mount the host session
   directory at `/home/node/.pi/sessions`, so `-c` finds the same history.
-- **Updating:** `pisbx update` (alias `upgrade`) pulls the clone recorded at
-  install time, refreshes `~/.local/bin/pisbx`, and rebuilds the images.
+- **Updating:** `pibox update` (alias `upgrade`) pulls the clone recorded at
+  install time, refreshes `~/.local/bin/pibox`, and rebuilds the images.
   `--check` reports without changing anything; `--no-bootstrap` keeps images;
   `--force` allows a dirty checkout.
-- **Install metadata:** `install.sh` writes `~/.config/pisbx/install.json`
+- **Install metadata:** `install.sh` writes `~/.config/pibox/install.json`
   (clone path, version, timestamp) with mode `600`.
 - **Docs:** added `docs/quickstart.md`, `docs/commands.md`,
   `docs/troubleshooting.md`, `docs/design.md`, and a quick start at the top of the

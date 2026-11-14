@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Install pisbx and, with permission, its prerequisites one at a time.
+# Install pibox and, with permission, its prerequisites one at a time.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-bin_dir="${PISBX_BIN_DIR:-$HOME/.local/bin}"
-target="$bin_dir/pisbx"
-cfg_dir="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
+bin_dir="${PIBOX_BIN_DIR:-$HOME/.local/bin}"
+target="$bin_dir/pibox"
+cfg_dir="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
 
 usage() {
   cat <<EOF
 usage: ./install.sh [--check] [--help]
 
-  (no option)  install pisbx and check/install prerequisites
+  (no option)  install pibox and check/install prerequisites
   --check      report missing prerequisites and exact commands, install nothing
   --help       show this message
 
@@ -32,7 +32,8 @@ esac
 
 if [ "$check_only" == 0 ]; then
   mkdir -p "$bin_dir"
-  install -m 0755 "$here/pisbx" "$target"
+  install -m 0755 "$here/pibox" "$target"
+ln -sf pibox "$bin_dir/pisbx"
 
   mkdir -p "$cfg_dir"
   if [ -f "$cfg_dir/install.json" ] && command -v jq >/dev/null 2>&1; then
@@ -43,7 +44,7 @@ if [ "$check_only" == 0 ]; then
     fi
   fi
   if command -v jq >/dev/null 2>&1; then
-    jq -n --arg repo "$here" --arg version "$("$here/pisbx" version)" \
+    jq -n --arg repo "$here" --arg version "$("$here/pibox" version)" \
        --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
        '{repo:$repo, version:$version, installed_at:$at}' >"$cfg_dir/install.json"
     chmod 600 "$cfg_dir/install.json"
@@ -126,7 +127,7 @@ detect() {
   have limactl && LIMA_BIN=1
   if [ "$DOCKER_BIN" == 0 ] && [ "$LIMA_BIN" == 0 ]; then MISSING+=("docker"); fi
   if [ "$DOCKER_BIN" == 1 ] && ! docker info >/dev/null 2>&1; then DOCKER_DOWN=1; fi
-  local sandbox_pi="${PISBX_SANDBOX_PI:-$HOME/.pi/agent/npm/node_modules/.bin/pi}"
+  local sandbox_pi="${PIBOX_SANDBOX_PI:-$HOME/.pi/agent/npm/node_modules/.bin/pi}"
   if [ -x "$sandbox_pi" ] && "$sandbox_pi" --help 2>&1 | grep -q -- '--remote <url>'; then
     SANDBOX_OK=1
   fi
@@ -227,7 +228,7 @@ dep_hint() {
         windows)
           printf '    install Docker Desktop with the WSL2 backend:\n'
           printf '      https://docs.docker.com/desktop/install/windows-install/\n'
-          printf '    run pisbx inside WSL2, not Git Bash\n' ;;
+          printf '    run pibox inside WSL2, not Git Bash\n' ;;
         *)
           case "$PM" in
             apt-get) printf '    sudo apt-get install -y docker.io\n    sudo usermod -aG docker "$USER"\n    sudo systemctl enable --now docker   # or: sudo service docker start\n' ;;
@@ -273,7 +274,7 @@ if [ "${#MISSING[@]}" -eq 0 ]; then
   if [ "$DOCKER_DOWN" == 1 ]; then
     printf 'warning: docker is installed but the daemon is not reachable\n'
     case "$OS" in
-      macos) printf '  start Docker Desktop (or: colima start) before pisbx bootstrap\n\n' ;;
+      macos) printf '  start Docker Desktop (or: colima start) before pibox bootstrap\n\n' ;;
       *) printf '  start it with: sudo systemctl start docker\n\n' ;;
     esac
   fi
@@ -281,15 +282,15 @@ if [ "${#MISSING[@]}" -eq 0 ]; then
     printf 'add this to your shell profile:\n  export PATH="%s:$PATH"\n\n' "$bin_dir"
   fi
   printf 'next:\n'
-  printf '  pisbx bootstrap          # build the sandbox images (required once)\n'
-  printf '  pisbx init --dry-run     # see which providers would be registered\n'
-  printf '  pisbx init               # register them in the OS keyring\n'
-  printf '  pisbx doctor             # verify dependencies, keys, permissions\n\n'
+  printf '  pibox bootstrap          # build the sandbox images (required once)\n'
+  printf '  pibox init --dry-run     # see which providers would be registered\n'
+  printf '  pibox init               # register them in the OS keyring\n'
+  printf '  pibox doctor             # verify dependencies, keys, permissions\n\n'
   printf '  cd ~/code/my-project\n'
-  printf '  pisbx run --model provider/model\n\n'
-  printf '  pisbx update --check     # later: check for a newer commit\n'
-  printf '  pisbx update             # pull, reinstall, rebuild images\n\n'
-  printf 'docs: https://github.com/gwangjinkim/pisbx/tree/main/docs\n'
+  printf '  pibox run --model provider/model\n\n'
+  printf '  pibox update --check     # later: check for a newer commit\n'
+  printf '  pibox update             # pull, reinstall, rebuild images\n\n'
+  printf 'docs: https://github.com/gwangjinkim/pibox/tree/main/docs\n'
   exit 0
 fi
 
@@ -362,7 +363,7 @@ if ! [ -t 0 ] || ! [ -t 1 ]; then
     dep_hint "$dep"
     printf '\n'
   done
-  printf 'then run: pisbx doctor\n'
+  printf 'then run: pibox doctor\n'
   exit 1
 fi
 
@@ -424,14 +425,14 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
     dep_hint "$dep"
     printf '\n'
   done
-  printf 'then run: pisbx doctor\n'
+  printf 'then run: pibox doctor\n'
   exit 1
 fi
 
 if [ "$DOCKER_DOWN" == 1 ]; then
   printf 'warning: docker is installed but the daemon is not reachable\n'
   case "$OS" in
-    macos) printf '  start Docker Desktop (or: colima start) before pisbx bootstrap\n\n' ;;
+    macos) printf '  start Docker Desktop (or: colima start) before pibox bootstrap\n\n' ;;
     *) printf '  start it with: sudo systemctl start docker\n\n' ;;
   esac
 fi
@@ -440,5 +441,5 @@ printf 'all prerequisites are installed.\n\n'
 if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
   printf 'add this to your shell profile:\n  export PATH="%s:$PATH"\n\n' "$bin_dir"
 fi
-printf 'next: pisbx bootstrap && pisbx init && pisbx doctor\n'
+printf 'next: pibox bootstrap && pibox init && pibox doctor\n'
 exit 0

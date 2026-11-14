@@ -1,14 +1,14 @@
-# pisbx
+# pibox
 
 **Run `pi` with your API keys in the OS keyring and its tools inside a container or VM.**
 
-You pick a model. `pisbx` works out which environment variable that provider needs,
+You pick a model. `pibox` works out which environment variable that provider needs,
 pulls the secret from your OS keyring, and starts `pi` in a sandbox — without ever
 putting a credential in your shell history, your repo, your Docker image, or the
 agent's long-lived environment.
 
 ```console
-$ pisbx run --model opencode-go/muse-spark-1.3-contributor
+$ pibox run --model opencode-go/muse-spark-1.3-contributor
 > provider=opencode-go variant=app00 env=OPENCODE_API_KEY runtime=docker mode=remote
 > starting sandbox daemon on 127.0.0.1:52048
 > tools run in the container; key is written to an ephemeral 0600 agent dir
@@ -22,35 +22,35 @@ No `export`. No `.env`. No key names to remember.
 
 ```bash
 # 1. install
-git clone https://github.com/gwangjinkim/pisbx.git
-cd pisbx && ./install.sh
+git clone https://github.com/gwangjinkim/pibox.git
+cd pibox && ./install.sh
 
 # 2. build the sandbox images once (required before the first run)
-pisbx bootstrap
+pibox bootstrap
 
 # 3. put a credential in the OS keyring (hidden prompt)
-pisbx init                     # import providers from ~/.pi/agent/auth.json
+pibox init                     # import providers from ~/.pi/agent/auth.json
 # or directly:
 skey set opencode-go app00
 
 # 4. run from the project you want the agent to see
 cd ~/code/my-project
-pisbx run --model opencode-go/muse-spark-1.3-contributor
+pibox run --model opencode-go/muse-spark-1.3-contributor
 
 # 5. later, update the clone and rebuild the images
-pisbx update
+pibox update
 ```
 
-If the folder already has sessions, `pisbx` asks whether to continue the last one
+If the folder already has sessions, `pibox` asks whether to continue the last one
 or start fresh. Skip the prompt with `--session-mode continue` or `--session-mode new`.
 
 First-run checklist:
 
 | Check | Why |
 |---|---|
-| `pisbx doctor` | dependencies, Docker/Lima, keyring entries, file permissions |
-| `pisbx bootstrap` | without it you get `image 'pisbx-sandbox' is missing` |
-| `pisbx migrate --dry-run` | optional: strip plaintext keys from `auth.json` |
+| `pibox doctor` | dependencies, Docker/Lima, keyring entries, file permissions |
+| `pibox bootstrap` | without it you get `image 'pibox-sandbox' is missing` |
+| `pibox migrate --dry-run` | optional: strip plaintext keys from `auth.json` |
 
 More: [Quick start](docs/quickstart.md) · [Command reference](docs/commands.md) ·
 [Troubleshooting](docs/troubleshooting.md)
@@ -59,7 +59,7 @@ More: [Quick start](docs/quickstart.md) · [Command reference](docs/commands.md)
 
 ## Status
 
-`pisbx` is a small, auditable launcher (one bash script). It is **not** a security
+`pibox` is a small, auditable launcher (one bash script). It is **not** a security
 boundary by itself: read [Threat model](#threat-model) and
 [Verified limitations](#verified-limitations) before relying on it for untrusted
 code.
@@ -69,7 +69,7 @@ Requires: `bash`, `jq`, [`skey`](https://github.com/gwangjinkim/skey),
 
 ---
 
-## Why pisbx?
+## Why pibox?
 
 ### 1. An AI coding agent's environment *is* a credential store
 
@@ -90,7 +90,7 @@ The key is not "in the tool". It is in the *environment*, which is a shared,
 world-readable-to-your-user namespace that any dependency, extension, MCP server,
 postinstall hook, or prompt-injected shell command can read.
 
-`pisbx` changes the question from *"can this dependency read my key?"* (yes) to
+`pibox` changes the question from *"can this dependency read my key?"* (yes) to
 *"is my key in this process at all?"* (no, until the moment of use).
 
 ### 2. The software supply chain actively harvests environment variables
@@ -186,17 +186,17 @@ environment away.
 
 ---
 
-## What pisbx does
+## What pibox does
 
 Four principles:
 
 1. **The keyring is the only source of truth.** Secrets live in the OS keyring
    (via `skey`: macOS Keychain, Linux Secret Service, Windows Credential Manager).
-   `pisbx` never prints them and never stores them in config.
+   `pibox` never prints them and never stores them in config.
 2. **Never argv.** Secrets are never passed as command-line arguments, where `ps`
    would expose them to every user on the machine.
 3. **Resolve by provider, not by variable name.** You say
-   `--model opencode-go/...`; `pisbx` maps it to `OPENCODE_API_KEY` using the table
+   `--model opencode-go/...`; `pibox` maps it to `OPENCODE_API_KEY` using the table
    from `pi`'s own `docs/providers.md`.
 4. **Sandbox the tools, not just the prompt.** Either `pi` orchestrates on the host
    while its tools execute in a container (`--mode remote`), or the whole process
@@ -206,7 +206,7 @@ Four principles:
 
 ```
                       ┌───────────────────────────────┐
-   you type           │  pisbx run --model P/M        │
+   you type           │  pibox run --model P/M        │
    ─────────────►     └───────────────┬───────────────┘
                                       │
                     1. resolve provider → env var (static table)
@@ -251,8 +251,8 @@ That last property is the one worth testing yourself (see
 ## Install
 
 ```bash
-git clone https://github.com/gwangjinkim/pisbx.git
-cd pisbx
+git clone https://github.com/gwangjinkim/pibox.git
+cd pibox
 ./install.sh
 ```
 
@@ -264,7 +264,7 @@ exact manual steps for any dependency whose automatic install fails.
 Equivalent manual install:
 
 ```bash
-install -m 0755 pisbx ~/.local/bin/pisbx
+install -m 0755 pibox ~/.local/bin/pibox
 ```
 
 ### Interactive install
@@ -319,9 +319,9 @@ the steps instead of running anything.
 Build only the toolchains you need. `pi` is always included.
 
 ```bash
-pisbx bootstrap --with python
-pisbx bootstrap --with node,rust,build
-pisbx bootstrap --with python,node,go,rust,build,cli
+pibox bootstrap --with python
+pibox bootstrap --with node,rust,build
+pibox bootstrap --with python,node,go,rust,build,cli
 ```
 
 | Feature | Aliases | Adds |
@@ -342,8 +342,8 @@ Always present: `pi`, `bash`, `git`, `curl`, `jq`, `less`, `rg`, `fd`.
 | `--with all` / `--dev` | everything | 1.6 GB |
 | `--standard` | Debian + toolchain | 733 MB |
 
-Image tags encode the selection, e.g. `pisbx-full-dev-js-rs-cc`. The choice is
-stored in config, so `pisbx run` uses it automatically.
+Image tags encode the selection, e.g. `pibox-full-dev-js-rs-cc`. The choice is
+stored in config, so `pibox run` uses it automatically.
 
 ### `./install.sh --check` (install nothing)
 
@@ -400,23 +400,23 @@ Exit codes:
 Then:
 
 ```bash
-pisbx doctor     # dependencies, keyring contents, permissions, plaintext-key warnings
-pisbx bootstrap  # write Dockerfiles into ~/.config/pisbx/docker and build both images
+pibox doctor     # dependencies, keyring contents, permissions, plaintext-key warnings
+pibox bootstrap  # write Dockerfiles into ~/.config/pibox/docker and build both images
 ```
 
 ### Updating
 
-`install.sh` records the clone location in `~/.config/pisbx/install.json`. After that:
+`install.sh` records the clone location in `~/.config/pibox/install.json`. After that:
 
 ```bash
-pisbx update --check   # show whether a newer commit exists
-pisbx update           # git pull, refresh ~/.local/bin/pisbx, rebuild images
-pisbx update --no-bootstrap   # pull + reinstall, keep existing images
+pibox update --check   # show whether a newer commit exists
+pibox update           # git pull, refresh ~/.local/bin/pibox, rebuild images
+pibox update --no-bootstrap   # pull + reinstall, keep existing images
 ```
 
 `update` refuses to run on a dirty checkout unless you pass `--force`. It uses
 `git pull --ff-only`, so it never creates merge commits. If you installed by
-copying the script without a clone, set `PISBX_REPO=/path/to/pisbx`.
+copying the script without a clone, set `PIBOX_REPO=/path/to/pibox`.
 
 ### Install per OS
 
@@ -424,9 +424,9 @@ copying the script without a clone, set `PISBX_REPO=/path/to/pisbx`.
 |---|---|---|
 | macOS | Docker Desktop or OrbStack | `brew install lima` |
 | Linux | `sudo apt-get install docker.io` (or `podman-docker`), then add your user to the `docker` group | `sudo apt-get install lima` |
-| Windows | Docker Desktop with the WSL2 backend; run `pisbx` inside WSL2 | use a WSL2 distro as the VM |
+| Windows | Docker Desktop with the WSL2 backend; run `pibox` inside WSL2 | use a WSL2 distro as the VM |
 
-`pisbx doctor` prints the exact command for your platform when something is missing.
+`pibox doctor` prints the exact command for your platform when something is missing.
 
 ---
 
@@ -438,16 +438,18 @@ copying the script without a clone, set `PISBX_REPO=/path/to/pisbx`.
 | [docs/commands.md](docs/commands.md) | every subcommand, flag, environment variable, and session behavior |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | the errors people actually hit, and the fix |
 | [docs/design.md](docs/design.md) | credential flow, split vs whole execution, threat model |
+| [docs/environment.md](docs/environment.md) | project environments, ownership rules, pnpm store, timings |
+| [docs/combinations.md](docs/combinations.md) | image features, measured sizes, and which combination to pick |
 | [CHANGELOG.md](CHANGELOG.md) | what changed in each release |
 
-If you only read one page: run `pisbx bootstrap` once, then `pisbx run --model
+If you only read one page: run `pibox bootstrap` once, then `pibox run --model
 provider/model`. Everything else is optional.
 
 ---
 
 ## Command reference
 
-### `pisbx init [--dry-run] [--register]`
+### `pibox init [--dry-run] [--register]`
 
 Scans the pi agent directory and registers missing providers.
 
@@ -457,7 +459,7 @@ Scans the pi agent directory and registers missing providers.
 Why it exists: provider discovery is tedious and error-prone; the machine already
 knows which providers you configured.
 
-### `pisbx migrate [--dry-run]`
+### `pibox migrate [--dry-run]`
 
 Backs up and rewrites `auth.json`, dropping secrets and dead shell-out references
 while preserving OAuth and `$ENV` references.
@@ -465,22 +467,22 @@ while preserving OAuth and `$ENV` references.
 Why it exists: you cannot get the security benefit while a plaintext key is still
 sitting in the config file.
 
-### `pisbx bootstrap [--minimal|--standard]`
+### `pibox bootstrap [--minimal|--standard]`
 
-Writes `~/.config/pisbx/docker/Dockerfile{,.sandbox}` and builds both images.
+Writes `~/.config/pibox/docker/Dockerfile{,.sandbox}` and builds both images.
 
 | Variant | Size per image | Base | Trade-off |
 |---|---|---|---|
 | `standard` | ~730 MB | `node:22-bookworm-slim` + toolchain | full build tools |
 | `--minimal` | ~155 MB | `alpine` + Bun-compiled binary | slower build, no compilers |
 
-The variant is stored in config; `PISBX_VARIANT=minimal` overrides it.
+The variant is stored in config; `PIBOX_VARIANT=minimal` overrides it.
 `bootstrap` always rebuilds; unchanged layers come from the build cache.
 
 Why it exists: the upstream default sandbox image is not publicly pullable, and
 building from a pinned `PI_VERSION` makes the environment reproducible.
 
-### `pisbx doctor`
+### `pibox doctor`
 
 Prints versions, docker/lima state, keyring entries, file permissions, and warns
 about plaintext keys. Exit code is non-zero when a security check fails, so it is
@@ -488,10 +490,10 @@ usable in CI.
 
 Why it exists: most security failures are configuration drift, not exploits.
 
-### `pisbx update [--check] [--no-bootstrap] [--force]`
+### `pibox update [--check] [--no-bootstrap] [--force]`
 
-Pulls the clone recorded by `install.sh` at `~/.config/pisbx/install.json`,
-refreshes `~/.local/bin/pisbx`, and rebuilds the images.
+Pulls the clone recorded by `install.sh` at `~/.config/pibox/install.json`,
+refreshes `~/.local/bin/pibox`, and rebuilds the images.
 
 - `--check` shows whether a newer commit exists, without changing anything
 - `--no-bootstrap` pulls and reinstalls but keeps the current images
@@ -500,7 +502,7 @@ refreshes `~/.local/bin/pisbx`, and rebuilds the images.
 Why it exists: the script and the Docker images must move together; a half-updated
 install is the most common source of confusing failures.
 
-### `pisbx run --model <provider>/<model> [options] [-- pi args]`
+### `pibox run --model <provider>/<model> [options] [-- pi args]`
 
 | Option | Default | Why |
 |---|---|---|
@@ -511,21 +513,21 @@ install is the most common source of confusing failures.
 | `--force` | off | allows mounting `$HOME` or `/` as the workspace (dangerous) |
 | `--no-extensions` | off | do not load extensions in the sandbox |
 | `--session-mode ask\|continue\|new` | `ask` | when the folder already has sessions, ask; `continue` passes `-c`; `new` starts fresh |
-| `--workspace mount\|git` | `mount` | `mount` edits your live tree; `git` works in a worktree and commits to `pisbx/<session>` |
+| `--workspace mount\|git` | `mount` | `mount` edits your live tree; `git` works in a worktree and commits to `pibox/<session>` |
 
-`auto` picks `container` when the project has a `pisbx.toml` (so the project
+`auto` picks `container` when the project has a `pibox.toml` (so the project
 environment is used), and otherwise `remote` when the installed sandbox `pi`
 supports `--remote`.
 
 **Extension build mismatch.** Remote mode requires the `@fleetagent` sandbox build.
 Extensions written against `@earendil-works/*` cannot load there. If your global
-`settings.json` declares packages and `auto` would choose remote, `pisbx` stops
+`settings.json` declares packages and `auto` would choose remote, `pibox` stops
 with three options instead of printing load errors:
 
 ```
-1) pisbx migrate && pisbx run --mode container   sandboxed, extensions work
-2) pisbx run --mode native                       no sandbox, exact setup
-3) pisbx run --no-extensions                     sandboxed, extensions off
+1) pibox migrate && pibox run --mode container   sandboxed, extensions work
+2) pibox run --mode native                       no sandbox, exact setup
+3) pibox run --no-extensions                     sandboxed, extensions off
 ```
 
 Container mode with a project environment is the only sandboxed mode that loads
@@ -537,17 +539,17 @@ Measured with the eight extensions from a real global setup, warm pnpm store:
 
 | Step | Time |
 |---|---|
-| `pisbx sync` cold (empty store) | ~8.5s |
-| `pisbx sync` warm (rebuild env) | ~0.65s |
-| `pisbx run` with a prebuilt env inside a container | ~0.6s, zero install |
+| `pibox sync` cold (empty store) | ~8.5s |
+| `pibox sync` warm (rebuild env) | ~0.65s |
+| `pibox run` with a prebuilt env inside a container | ~0.6s, zero install |
 
 The environment is installed by **pnpm** into a shared content-addressable store
-(`~/.cache/pisbx/pnpm-store`) and mounted into the container or VM, so the box
+(`~/.cache/pibox/pnpm-store`) and mounted into the container or VM, so the box
 normally installs nothing at all. See [docs/environment.md](docs/environment.md).
 
 ### Extension fidelity
 
-`pisbx` preserves your agent directory: in `remote` and `native` modes it builds an
+`pibox` preserves your agent directory: in `remote` and `native` modes it builds an
 ephemeral directory with symlinks to `settings.json`, `extensions/`, `npm/`,
 `statusline/`, themes, and so on, and adds only its own ephemeral `auth.json`.
 
@@ -556,7 +558,7 @@ the `@fleetagent` build). Extensions written against `@earendil-works/pi-tui` ca
 load there, so the dashboard can look different. When that matters:
 
 ```bash
-pisbx run --model provider/model --mode native
+pibox run --model provider/model --mode native
 ```
 
 `native` runs your installed `pi` with your full config and no sandbox. The key
@@ -570,10 +572,10 @@ By default the project is bind-mounted, so edits are immediately permanent.
 For hermetic work, `--workspace git` creates a worktree from a snapshot of your
 dirty tree, copies **untracked non-ignored** files, and therefore never copies
 `.env` or anything else in `.gitignore`. On exit it commits to
-`pisbx/<session>`; your live tree is untouched.
+`pibox/<session>`; your live tree is untouched.
 
 ```bash
-pisbx run pi --workspace git --model opencode-go/muse-spark-1.3-contributor
+pibox run pi --workspace git --model opencode-go/muse-spark-1.3-contributor
 ```
 
 Or persist the choice:
@@ -588,7 +590,7 @@ See [docs/environment.md](docs/environment.md#git-workspace-mode).
 ### Sessions in an existing folder
 
 Session files live under `~/.pi/agent/sessions/--<encoded-cwd>--/`. If that folder
-already has sessions, `pisbx` asks once:
+already has sessions, `pibox` asks once:
 
 ```
 found 2 previous session(s) for this folder
@@ -602,32 +604,32 @@ found 2 previous session(s) for this folder
 
 Non-interactive runs, and runs that already pass a session flag (`-c`, `--session`,
 `--resume`, etc.) are left alone. Override the prompt with
-`--session-mode continue|new` or `PISBX_SESSION_MODE`.
+`--session-mode continue|new` or `PIBOX_SESSION_MODE`.
 
 In `container` and `lima` modes the host session directory is mounted into the
 agent home, so continuing a session works across runtimes.
 
-### `pisbx recover [--fix]`
+### `pibox recover [--fix]`
 
 After a crash, this reports leftover containers, stale temp agent dirs, git
 worktrees, an incomplete environment, and the session count. `--fix` removes
 stopped containers, stale temp dirs, and clean worktrees, and rebuilds an
 incomplete environment. Running containers and branches are never deleted.
 
-### `pisbx clean [--containers] [--tmp] [--work] [--env] [--all] [--force]`
+### `pibox clean [--containers] [--tmp] [--work] [--env] [--all] [--force]`
 
 Targeted cleanup. Default is stopped containers plus stale temp dirs;
-`--force` includes running containers; `--env` removes `.pisbx/env`.
+`--force` includes running containers; `--env` removes `.pibox/env`.
 
-### `pisbx sessions list|resume|export`
+### `pibox sessions list|resume|export`
 
 ```bash
-pisbx sessions list
-pisbx sessions resume latest --model opencode-go/muse-spark-1.3-contributor
-pisbx sessions export latest out.html
+pibox sessions list
+pibox sessions resume latest --model opencode-go/muse-spark-1.3-contributor
+pibox sessions export latest out.html
 ```
 
-### `pisbx vm status\|start\|stop\|delete\|shell`
+### `pibox vm status\|start\|stop\|delete\|shell`
 
 Manages the Lima instance used by `--runtime lima`.
 
@@ -641,14 +643,14 @@ sessions, extensions, or settings.
 ### 0. Record the current state
 
 ```bash
-pisbx doctor > before.txt
+pibox doctor > before.txt
 cp ~/.pi/agent/auth.json ~/.pi/agent/auth.json.manual-backup
 ```
 
 ### 1. See what will be registered
 
 ```bash
-pisbx init --dry-run
+pibox init --dry-run
 ```
 
 Typical output:
@@ -664,7 +666,7 @@ Typical output:
 ### 2. Register the missing providers
 
 ```bash
-pisbx init --register
+pibox init --register
 ```
 
 Each `skey set` prompts once with hidden input.
@@ -672,7 +674,7 @@ Each `skey set` prompts once with hidden input.
 ### 3. Preview the config rewrite
 
 ```bash
-pisbx migrate --dry-run
+pibox migrate --dry-run
 ```
 
 ```
@@ -684,14 +686,14 @@ pisbx migrate --dry-run
 ### 4. Apply
 
 ```bash
-pisbx migrate
+pibox migrate
 ```
 
 ### 5. Verify
 
 ```bash
-pisbx doctor
-pisbx run --model <provider>/<model> -p "say hi"
+pibox doctor
+pibox run --model <provider>/<model> -p "say hi"
 ```
 
 ### 6. Roll back if needed
@@ -710,13 +712,13 @@ cp ~/.pi/agent/auth.json.backup.<timestamp> ~/.pi/agent/auth.json
   your normal config. Multi-secret bundles are on the roadmap.
 - **Extensions, skills, rules, sessions, themes**: unchanged and still on the host
   in `remote` mode. In `container` mode they live inside the container's
-  `pisbx-home` volume; use `--mode remote` if you depend on host extensions.
+  `pibox-home` volume; use `--mode remote` if you depend on host extensions.
 
 ---
 
 ## Configuration
 
-`~/.config/pisbx/config.json` (override with `PISBX_CONFIG_DIR`). It contains **no
+`~/.config/pibox/config.json` (override with `PIBOX_CONFIG_DIR`). It contains **no
 secrets**.
 
 ```json
@@ -733,11 +735,11 @@ Environment variables:
 
 | Variable | Meaning |
 |---|---|
-| `PISBX_CONFIG_DIR` | config + generated Dockerfiles |
-| `PISBX_IMAGE`, `PISBX_IMAGE_FULL` | image tags |
-| `PISBX_SANDBOX_PI` | pi binary that supports `--remote` |
-| `PISBX_LIMA_NAME` | Lima instance name |
-| `PISBX_NO_EXTENSIONS=1` | pass `--no-extensions` to pi in remote mode |
+| `PIBOX_CONFIG_DIR` | config + generated Dockerfiles |
+| `PIBOX_IMAGE`, `PIBOX_IMAGE_FULL` | image tags |
+| `PIBOX_SANDBOX_PI` | pi binary that supports `--remote` |
+| `PIBOX_LIMA_NAME` | Lima instance name |
+| `PIBOX_NO_EXTENSIONS=1` | pass `--no-extensions` to pi in remote mode |
 | `PI_CODING_AGENT_DIR` | discovered automatically; used read-only |
 
 ---
@@ -783,9 +785,9 @@ These were reproduced during development and are documented rather than hidden.
    That is why `migrate` removes those entries instead of rewriting them.
 3. **`--mode remote` depends on the auth path.** With the key only in the
    ephemeral `auth.json`, a sandboxed `env` showed **no** provider key. If you
-   sidestep `pisbx` and export the key into the environment, the daemon forwards
+   sidestep `pibox` and export the key into the environment, the daemon forwards
    the environment it sees and the key becomes visible to sandboxed bash. Always
-   launch through `pisbx run`.
+   launch through `pibox run`.
 4. **`--mode container` necessarily exposes the key inside the container** (as an
    environment variable). Same container, same network egress. Use `remote` when
    the key matters more than convenience.
@@ -806,7 +808,7 @@ These were reproduced during development and are documented rather than hidden.
       a local base URL; the host proxy injects the real key upstream. Then the key
       can never be read from inside, and you get per-provider quotas and audit logs.
 - [ ] Multi-secret bundles for Azure/AWS/Cloudflare (JSON in one keyring entry).
-- [ ] `pisbx run --ephemeral` to mount the workspace read-only and copy it into a
+- [ ] `pibox run --ephemeral` to mount the workspace read-only and copy it into a
       disposable volume.
 - [ ] `--runtime wsl` for Windows without Docker Desktop.
 - [ ] Shell completions.
@@ -817,7 +819,7 @@ These were reproduced during development and are documented rather than hidden.
 ## FAQ
 
 **Does this replace `skey`?**
-No. `pisbx` is the orchestration layer on top. `skey` stays the single source of
+No. `pibox` is the orchestration layer on top. `skey` stays the single source of
 truth for secrets, and remains useful on its own.
 
 **Why not use `direnv` / `.env` / 1Password CLI?**
@@ -836,7 +838,7 @@ It makes credential selection deterministic and removes an entire class of "wron
 key" errors.
 
 **Can I use this with `pi`'s own `/sandbox` command?**
-Yes, but `/sandbox` is interactive-only and uses a private default image. `pisbx`
+Yes, but `/sandbox` is interactive-only and uses a private default image. `pibox`
 uses the same daemon protocol non-interactively.
 
 **Does it work offline?**

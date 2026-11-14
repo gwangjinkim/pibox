@@ -7,15 +7,15 @@
 ### 1. Install
 
 ```bash
-git clone https://github.com/gwangjinkim/pisbx.git
-cd pisbx
+git clone https://github.com/gwangjinkim/pibox.git
+cd pibox
 ./install.sh
 ```
 
-That puts `pisbx` in `~/.local/bin`. Check it:
+That puts `pibox` in `~/.local/bin`. Check it:
 
 ```bash
-pisbx doctor
+pibox doctor
 ```
 
 You should see your `pi` version, Docker, and your keyring entries.
@@ -31,7 +31,7 @@ prints the key.
 **Option A — let it find what you already have:**
 
 ```bash
-pisbx init
+pibox init
 ```
 
 It reads `~/.pi/agent/auth.json`, lists every provider you've configured, and asks
@@ -82,7 +82,7 @@ You will not type these names again.
 ### 3. Build the sandbox once
 
 ```bash
-pisbx bootstrap
+pibox bootstrap
 ```
 
 Two small Docker images: one for running `pi`'s tools in a container, one for
@@ -90,25 +90,25 @@ running all of `pi` in a container. Re-run only when you upgrade `pi`.
 
 ---
 
-### 4. Start pisbx
+### 4. Start pibox
 
 ```bash
 cd ~/code/my-project
-pisbx run --model opencode-go/muse-spark-1.3-contributor
+pibox run --model opencode-go/muse-spark-1.3-contributor
 ```
 
 That's it. Everything after the flags is passed to `pi`:
 
 ```bash
-pisbx run --model anthropic/claude-sonnet-4 -p "explain this repo"
-pisbx run --model openai/gpt-5.6 -c
+pibox run --model anthropic/claude-sonnet-4 -p "explain this repo"
+pibox run --model openai/gpt-5.6 -c
 ```
 
 Notice what's **not** in that command: no `export`, no `.env`, no key name, no
 `--api-key`, no remembering which provider wants `GEMINI_API_KEY` versus
 `GOOGLE_API_KEY`.
 
-You pick a model. `pisbx` figures out the rest.
+You pick a model. `pibox` figures out the rest.
 
 ---
 
@@ -151,12 +151,12 @@ That last one is the point.
 It cannot protect the key that runs the model. It protects everything around it —
 and that is where most leaks actually happen.
 
-A container isolates your filesystem, not your credentials. `pisbx` is built around
+A container isolates your filesystem, not your credentials. `pibox` is built around
 that distinction rather than pretending it doesn't exist.
 
 ---
 
-## What you have to do if you don't use pisbx
+## What you have to do if you don't use pibox
 
 Here's the manual version. Every time.
 
@@ -213,10 +213,10 @@ Before, every session started with a small stack of nagging questions:
 - Did I clean up the container and the token?
 - Which variant was I using — `app00` or `prod`?
 
-`pisbx` deletes that list. You remember **one** thing: the model you want.
+`pibox` deletes that list. You remember **one** thing: the model you want.
 
 ```bash
-pisbx run --model opencode-go/muse-spark-1.3-contributor
+pibox run --model opencode-go/muse-spark-1.3-contributor
 ```
 
 Everything else — key lookup, variant selection, container startup, token
@@ -324,10 +324,10 @@ sandbox. The permanent fix — a credential-injecting proxy — is next on the r
 ## The one-line version
 
 ```bash
-pisbx run --model opencode-go/muse-spark-1.3-contributor
+pibox run --model opencode-go/muse-spark-1.3-contributor
 ```
 
 One command. Key from the keyring. Tools in a container. Fewer things to remember,
 fewer places to leak.
 
-**Repo:** https://github.com/gwangjinkim/pisbx
+**Repo:** https://github.com/gwangjinkim/pibox

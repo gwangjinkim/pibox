@@ -1,6 +1,6 @@
 # Design
 
-`pisbx` is one bash script by intention: it should be possible to read the whole
+`pibox` is one bash script by intention: it should be possible to read the whole
 thing before trusting it with a key.
 
 ## Three concerns, kept separate
@@ -9,7 +9,7 @@ thing before trusting it with a key.
 
 - secrets live in the OS keyring via `skey` (macOS Keychain, Linux Secret Service,
   Windows Credential Manager)
-- `~/.config/pisbx/config.json` maps `provider → variant → environment variable`
+- `~/.config/pibox/config.json` maps `provider → variant → environment variable`
   and contains **no secrets**
 - during `--mode remote`, the key is written to an ephemeral `0600 auth.json` in a
   `0700` directory, injected into a short-lived shell, and `unset` before `pi`
@@ -27,11 +27,11 @@ never in the repository, never in an image layer.
 | `container` | container | container | container env |
 | `lima` | container in VM | container in VM | VM (via `0600` env-file) |
 
-`remote` starts `pisbx-sandbox`, waits for `daemon ready`, and runs the host `pi`
+`remote` starts `pibox-sandbox`, waits for `daemon ready`, and runs the host `pi`
 with `--remote ws://127.0.0.1:<port>/pi/workspace`. The sandbox sees one bind mount
 (`/workspace`) and nothing from the host home directory.
 
-`container` runs the whole CLI in `pisbx-full` with a persistent named volume for
+`container` runs the whole CLI in `pibox-full` with a persistent named volume for
 the agent home, plus a bind mount of the host session directory.
 
 ### 3. Sessions
@@ -39,7 +39,7 @@ the agent home, plus a bind mount of the host session directory.
 Session history is per working directory:
 `~/.pi/agent/sessions/--<encoded-cwd>--/*.jsonl` (or `$PI_SESSION_DIR`).
 
-On start, `pisbx` checks that folder. If it has sessions and the invocation is
+On start, `pibox` checks that folder. If it has sessions and the invocation is
 interactive, it asks:
 
 ```
@@ -55,20 +55,20 @@ In container modes the host session directory is mounted at
 
 ## Images
 
-`pisbx bootstrap` generates two Dockerfiles from pinned versions:
+`pibox bootstrap` generates two Dockerfiles from pinned versions:
 
-- `Dockerfile.sandbox` → `pisbx-sandbox` (`pi --daemon`, fleetagent build)
-- `Dockerfile` → `pisbx-full` (complete `pi` install)
+- `Dockerfile.sandbox` → `pibox-sandbox` (`pi --daemon`, fleetagent build)
+- `Dockerfile` → `pibox-full` (complete `pi` install)
 
 Both run as uid `1000`, with `/workspace` as the only host mount, `/tmp` as
 container-local scratch, and no Docker socket.
 
 ## Update model
 
-`install.sh` records the clone path in `install.json`. `pisbx update` runs:
+`install.sh` records the clone path in `install.json`. `pibox update` runs:
 
 ```
-git fetch → git pull --ff-only → install.sh → pisbx bootstrap
+git fetch → git pull --ff-only → install.sh → pibox bootstrap
 ```
 
 Script and images move together. `--check` reports without changing anything;
@@ -97,4 +97,4 @@ Script and images move together. `--check` reports without changing anything;
   the host proxy injects the real key upstream
 - multi-secret providers (Azure, Bedrock, Cloudflare)
 - read-only workspace mode with a disposable copy
-- shell completions and a `pisbx status` summary
+- shell completions and a `pibox status` summary

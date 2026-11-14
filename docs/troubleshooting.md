@@ -5,19 +5,19 @@ credential registered, a `pi` build without `--remote`, or a dirty git checkout.
 
 ---
 
-## `image 'pisbx-sandbox' is missing and no Dockerfile found`
+## `image 'pibox-sandbox' is missing and no Dockerfile found`
 
 You have not run bootstrap in this config directory.
 
 ```bash
-pisbx bootstrap
+pibox bootstrap
 ```
 
-If you previously used a different `PISBX_CONFIG_DIR`, either export it again or run
+If you previously used a different `PIBOX_CONFIG_DIR`, either export it again or run
 bootstrap with it:
 
 ```bash
-PISBX_CONFIG_DIR=/path/to/config pisbx bootstrap
+PIBOX_CONFIG_DIR=/path/to/config pibox bootstrap
 ```
 
 ---
@@ -32,9 +32,9 @@ docker info
 |---|---|
 | macOS | start Docker Desktop or OrbStack |
 | Linux | `sudo systemctl start docker` and add your user to the `docker` group |
-| Windows | start Docker Desktop with the WSL2 backend, run `pisbx` inside WSL2 |
+| Windows | start Docker Desktop with the WSL2 backend, run `pibox` inside WSL2 |
 
-Docker group membership is root-equivalent. `pisbx` does not change that; it changes
+Docker group membership is root-equivalent. `pibox` does not change that; it changes
 what the agent can reach.
 
 ---
@@ -48,7 +48,7 @@ skey set X default
 or import everything pi already knows:
 
 ```bash
-pisbx init
+pibox init
 ```
 
 Check what is registered (names only):
@@ -65,7 +65,7 @@ This came from a bug where a missing credential produced an empty environment
 variable name. Update:
 
 ```bash
-pisbx update
+pibox update
 ```
 
 ---
@@ -75,11 +75,11 @@ pisbx update
 Split mode needs a `pi` build that implements the workspace daemon. The installed
 `pi` may be a newer build without it.
 
-Point `pisbx` at a sandbox-capable build:
+Point `pibox` at a sandbox-capable build:
 
 ```bash
-PISBX_SANDBOX_PI="$HOME/.pi/agent/npm/node_modules/.bin/pi" \
-  pisbx run --model opencode-go/muse-spark-1.3-contributor
+PIBOX_SANDBOX_PI="$HOME/.pi/agent/npm/node_modules/.bin/pi" \
+  pibox run --model opencode-go/muse-spark-1.3-contributor
 ```
 
 Check quickly:
@@ -103,7 +103,7 @@ Alternative: use `--mode container`, which does not need `--remote`.
 Inspect the container logs:
 
 ```bash
-docker ps -a | grep pisbx
+docker ps -a | grep pibox
 docker logs <name>
 ```
 
@@ -113,11 +113,11 @@ Common causes:
 - Docker bridge networking disabled
 - the port was taken between allocation and start
 
-Re-run; `pisbx` allocates a fresh port. If it persists, run the daemon manually:
+Re-run; `pibox` allocates a fresh port. If it persists, run the daemon manually:
 
 ```bash
 docker run --rm -it -e PI_DAEMON_TOKEN="$(openssl rand -hex 32)" \
-  -v "$PWD:/workspace" -p 127.0.0.1:8787:8787 pisbx-sandbox
+  -v "$PWD:/workspace" -p 127.0.0.1:8787:8787 pibox-sandbox
 ```
 
 ---
@@ -129,9 +129,9 @@ By design, the prompt is skipped when:
 - the folder has no sessions
 - stdin/stdout is not a terminal
 - you passed a session flag (`-c`, `--session`, `--resume`, `--fork`, `--no-session`)
-- `--session-mode` or `PISBX_SESSION_MODE` was set
+- `--session-mode` or `PIBOX_SESSION_MODE` was set
 
-Inspect what `pisbx` sees:
+Inspect what `pibox` sees:
 
 ```bash
 ls ~/.pi/agent/sessions/--$(pwd | sed 's|^/||; s|/|-|g')--/
@@ -140,33 +140,33 @@ ls ~/.pi/agent/sessions/--$(pwd | sed 's|^/||; s|/|-|g')--/
 Force a choice:
 
 ```bash
-pisbx run --model provider/model --session-mode continue
-pisbx run --model provider/model --session-mode new
+pibox run --model provider/model --session-mode continue
+pibox run --model provider/model --session-mode new
 ```
 
 ---
 
 ## Sessions do not carry over between host and container
 
-`pisbx` mounts `~/.pi/agent/sessions` (or `$PI_SESSION_DIR`) into
+`pibox` mounts `~/.pi/agent/sessions` (or `$PI_SESSION_DIR`) into
 `/home/node/.pi/sessions` in `container` and `lima` modes. If you changed
 `PI_SESSION_DIR`, export the same value for the container run.
 
 ---
 
-## `git pull --ff-only failed` during `pisbx update`
+## `git pull --ff-only failed` during `pibox update`
 
 ```bash
-git -C "$(jq -r .repo ~/.config/pisbx/install.json)" status
+git -C "$(jq -r .repo ~/.config/pibox/install.json)" status
 ```
 
 | Cause | Fix |
 |---|---|
-| local edits | commit or stash them, or `pisbx update --force` |
-| diverged branch | resolve manually, then `pisbx update --no-bootstrap` |
+| local edits | commit or stash them, or `pibox update --force` |
+| diverged branch | resolve manually, then `pibox update --no-bootstrap` |
 | no upstream | `git branch --set-upstream-to=origin/main` |
 
-If the clone moved, re-run `install.sh` from the new location or set `PISBX_REPO`.
+If the clone moved, re-run `install.sh` from the new location or set `PIBOX_REPO`.
 
 ---
 
@@ -182,16 +182,16 @@ sudo apt-get install lima
 Create the VM once:
 
 ```bash
-limactl start --name=pisbx --tty=false template:docker-rootful
+limactl start --name=pibox --tty=false template:docker-rootful
 ```
 
 Then build the full image inside it:
 
 ```bash
-limactl shell pisbx -- docker build -t pisbx-full ~/.config/pisbx/docker
+limactl shell pibox -- docker build -t pibox-full ~/.config/pibox/docker
 ```
 
-`pisbx vm status` reports the current state.
+`pibox vm status` reports the current state.
 
 ---
 
@@ -201,7 +201,7 @@ Some features are intentionally avoided so the script runs on macOS's default ba
 3.2. If you see syntax errors, check which shell is executing:
 
 ```bash
-head -1 "$(command -v pisbx)"
+head -1 "$(command -v pibox)"
 bash --version
 ```
 
@@ -222,15 +222,15 @@ env | grep -c API_KEY
 ```
 
 If this is non-zero in remote mode, you bypassed the launcher (for example, by
-exporting the key yourself). Always start through `pisbx run`.
+exporting the key yourself). Always start through `pibox run`.
 
 ---
 
 ## Something else
 
 ```bash
-pisbx doctor
-pisbx run --model provider/model --dry-run
+pibox doctor
+pibox run --model provider/model --dry-run
 ```
 
 `--dry-run` prints the exact command, with secrets redacted, without starting a

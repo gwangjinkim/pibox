@@ -1,0 +1,2065 @@
+#!/usr/bin/env bash
+#
+# pibox - run pi with credentials in the OS keyring and tools in a container or VM.
+#
+# Design rules (do not break these):
+#   1. Secrets are never passed in argv.
+#   2. Secrets are never written into the repository or the Docker image.
+#   3. The config file contains provider metadata, never key material.
+#   4. Every command that can touch a secret must work with --dry-run.
+#
+# Requires: bash, jq, skey (https://github.com/gwangjinkim/skey), docker and/or limactl.
+# Tested on macOS 15 (bash 3.2), Linux, and Docker Desktop on WSL2.
+#
+set -euo pipefail
+
+# ---------------------------------------------------------------- compatibility
+# Accept the old PISBX_* names and migrate ~/.config/pisbx once.
+for _old in PISBX_CONFIG_DIR PISBX_IMAGE PISBX_IMAGE_FULL PISBX_SANDBOX_PI \
+            PISBX_LIMA_NAME PISBX_SESSION_MODE PISBX_NO_EXTENSIONS PISBX_REPO \
+            PISBX_PNPM_STORE PISBX_OFFLINE PISBX_FROZEN PISBX_VARIANT PISBX_PI \
+            PISBX_FORCE; do
+  _new="PIBOX_${_old#PISBX_}"
+  if [[ -z "${!_new:-}" && -n "${!_old:-}" ]]; then
+    export "$_new=${!_old}"
+  fi
+done
+unset _old _new
+if [[ -z "${PIBOX_CONFIG_DIR:-}" && -d "$HOME/.config/pisbx" && ! -d "$HOME/.config/pibox" ]]; then
+  cp -R "$HOME/.config/pisbx" "$HOME/.config/pibox" 2>/dev/null || true
+  chmod 600 "$HOME/.config/pibox"/*.json 2>/dev/null || true
+fi
+
+PIBOX_VERSION="1.0.0"
+CFG_DIR="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
+CFG="$CFG_DIR/config.json"
+DOCKER_DIR="$CFG_DIR/docker"
+IMAGE="${PIBOX_IMAGE:-pibox-sandbox}"
+IMAGE_FULL="${PIBOX_IMAGE_FULL:-pibox-full}"
+SANDBOX_PI="${PIBOX_SANDBOX_PI:-$HOME/.pi/agent/npm/node_modules/.bin/pi}"
+LIMA_NAME="${PIBOX_LIMA_NAME:-pibox}"
+AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+
+# ---------- logging ----------
+if [[ -t 2 ]]; then
+  C_DIM=$'\033[2m'; C_CYAN=$'\033[36m'; C_YEL=$'\033[33m'; C_RED=$'\033[31m'; C_OFF=$'\033[0m'
+else
+  C_DIM=""; C_CYAN=""; C_YEL=""; C_RED=""; C_OFF=""
+fi
+info() { printf '%s>%s %s\n' "$C_CYAN" "$C_OFF" "$*" >&2; }
+warn() { printf '%s!%s %s\n' "$C_YEL" "$C_OFF" "$*" >&2; }
+die()  { printf '%sx%s %s\n' "$C_RED" "$C_OFF" "$*" >&2; exit 1; }
+dim()  { printf '%s  %s%s\n' "$C_DIM" "$*" "$C_OFF" >&2; }
+
+# ---------- provider -> environment variable ----------
+# Source: pi docs/providers.md (authoritative table, kept in sync by hand).
+provider_env() {
+  case "$1" in
+    anthropic)               echo ANTHROPIC_API_KEY ;;
+    openai)                  echo OPENAI_API_KEY ;;
+    google|gemini)           echo GEMINI_API_KEY ;;
+    deepseek)                echo DEEPSEEK_API_KEY ;;
+    openrouter)              echo OPENROUTER_API_KEY ;;
+    mistral)                 echo MISTRAL_API_KEY ;;
+    groq)                    echo GROQ_API_KEY ;;
+    cerebras)                echo CEREBRAS_API_KEY ;;
+    xai)                     echo XAI_API_KEY ;;
+    fireworks)               echo FIREWORKS_API_KEY ;;
+    together)                echo TOGETHER_API_KEY ;;
+    baseten)                 echo BASETEN_API_KEY ;;
+    opencode|opencode-go)    echo OPENCODE_API_KEY ;;
+    kimi)                    echo KIMI_API_KEY ;;
+    meta)                    echo META_API_KEY ;;
+    minimax)                 echo MINIMAX_API_KEY ;;
+    minimax-cn)              echo MINIMAX_CN_API_KEY ;;
+    moonshot)                echo MOONSHOT_API_KEY ;;
+    qwen)                    echo QWEN_TOKEN_PLAN_API_KEY ;;
+    qwen-cn)                 echo QWEN_TOKEN_PLAN_CN_API_KEY ;;
+    xiaomi)                  echo XIAOMI_API_KEY ;;
+    zai)                     echo ZAI_API_KEY ;;
+    nvidia)                  echo NVIDIA_API_KEY ;;
+    ai-gateway)              echo AI_GATEWAY_API_KEY ;;
+    huggingface)             echo HF_TOKEN ;;
+    copilot)                 echo COPILOT_GITHUB_TOKEN ;;
+    ant-ling)                echo ANT_LING_API_KEY ;;
+    radius)                  echo RADIUS_API_KEY ;;
+    typesafe)                echo TYPESAFE_API_KEY ;;
+    *)                       return 1 ;;
+  esac
+}
+
+# ---------- config ----------
+ensure_cfg() {
+  mkdir -p "$CFG_DIR"
+  if [[ ! -f "$CFG" ]]; then
+    printf '{"providers":{},"defaults":{"runtime":"docker","mode":"auto"}}\n' >"$CFG"
+    chmod 600 "$CFG"
+  fi
+}
+cfg_get() {
+  [[ -f "$CFG" ]] || return 1
+  jq -er --arg p "$1" --arg k "$2" '.providers[$p][$k] // empty' "$CFG" 2>/dev/null
+}
+cfg_set() {
+  ensure_cfg
+  local tmp="$CFG.tmp.$$"
+  jq --arg p "$1" --arg k "$2" --arg v "$3" \
+    '.providers[$p] = ((.providers[$p] // {}) | .[$k] = $v)' "$CFG" >"$tmp"
+  chmod 600 "$tmp"; mv "$tmp" "$CFG"
+}
+cfg_set_default() {
+  ensure_cfg
+  local tmp="$CFG.tmp.$$"
+  jq --arg k "$1" --arg v "$2" '.defaults[$k] = $v' "$CFG" >"$tmp"
+  chmod 600 "$tmp"; mv "$tmp" "$CFG"
+}
+cfg_default() {
+  ensure_cfg
+  jq -er --arg k "$1" '.defaults[$k] // empty' "$CFG" 2>/dev/null || true
+}
+
+# ---------- skey helpers (avoid SIGPIPE under pipefail) ----------
+skey_has() {
+  local out; out="$(skey list 2>/dev/null || true)"
+  grep -q "^$1:" <<<"$out"
+}
+skey_variants() {
+  local out; out="$(skey list "$1" 2>/dev/null || true)"
+  sed -n 's/^ *[0-9]*) //p' <<<"$out" | sed 's|.*/||'
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 && return 0
+  warn "missing dependency: $1"
+  case "$(uname -s)" in
+    Darwin)
+      printf '  macOS:   brew install %s\n' "$2" >&2 ;;
+    Linux)
+      printf '  Debian:  sudo apt-get install -y %s\n  Fedora:  sudo dnf install -y %s\n  Arch:    sudo pacman -S %s\n' "$2" "$2" "$2" >&2 ;;
+    MINGW*|MSYS*|CYGWIN*)
+      printf '  Windows: run inside WSL2, then: sudo apt-get install -y %s\n  Docker Desktop: https://docs.docker.com/desktop/install/windows-install/\n' "$2" >&2 ;;
+  esac
+  return 1
+}
+
+# ---------- runtime detection ----------
+have_tty() { [[ -t 0 && -t 1 ]]; }
+ask_yes() {
+  have_tty || return 1
+  local reply
+  printf '  %s [y/N] ' "$1" >&2
+  read -r reply
+  [[ "$reply" =~ ^[Yy]$ ]]
+}
+
+docker_ok() {
+  need_cmd docker docker || return 1
+  if ! docker info >/dev/null 2>&1; then
+    warn "cannot reach the Docker engine"
+    case "$(uname -s)" in
+      Darwin) printf '  start Docker Desktop or OrbStack, then retry\n' >&2 ;;
+      Linux)  printf '  sudo systemctl start docker   (and add your user to the docker group)\n' >&2 ;;
+      *)      printf '  start Docker Desktop (WSL2 backend recommended)\n' >&2 ;;
+    esac
+    return 1
+  fi
+}
+
+platform_tag() {
+  case "$(uname -m)" in
+    x86_64) echo linux/amd64 ;;
+    arm64|aarch64) echo linux/arm64 ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+}
+
+build_image() {
+  local img="$1" dockerfile="$2"
+  [[ -f "$dockerfile" ]] || die "no Dockerfile at $dockerfile"
+  docker build --platform "$(platform_tag)" -f "$dockerfile" -t "$img" "$(dirname "$dockerfile")" >&2
+}
+
+ensure_image() {
+  local img="$1" dockerfile="$2"
+  docker image inspect "$img" >/dev/null 2>&1 && return 0
+  [[ -f "$dockerfile" ]] || die "image '$img' is missing and no Dockerfile found at $dockerfile (run: pibox bootstrap)"
+  info "building $img (one time)"
+  docker build --platform "$(platform_tag)" -f "$dockerfile" -t "$img" "$(dirname "$dockerfile")" >&2
+}
+
+lima_state() {
+  local out; out="$(limactl list --format '{{.Name}} {{.Status}}' 2>/dev/null || true)"
+  if ! grep -q "^$LIMA_NAME " <<<"$out"; then echo absent
+  elif grep -q "^$LIMA_NAME Running" <<<"$out"; then echo running
+  else echo stopped; fi
+}
+
+ensure_lima() {
+  need_cmd limactl lima || return 1
+  case "$(lima_state)" in
+    absent)
+      warn "Lima VM '$LIMA_NAME' does not exist yet"
+      cat >&2 <<EOF
+  Create it (one time, downloads an image; ~5-10 min):
+    limactl start --name=$LIMA_NAME --tty=false template:docker-rootful
+  Then build the image inside the VM:
+    limactl shell $LIMA_NAME -- docker build -t $IMAGE_FULL $DOCKER_DIR
+EOF
+      return 4 ;;
+    stopped)
+      warn "Lima VM '$LIMA_NAME' is stopped"
+      if ask_yes "start it now?"; then
+        limactl start "$LIMA_NAME" >&2
+      else
+        return 4
+      fi ;;
+  esac
+  limactl shell "$LIMA_NAME" -- docker info >/dev/null 2>&1 || {
+    warn "docker is not reachable inside VM '$LIMA_NAME'"
+    return 4
+  }
+}
+
+
+# ---------- install metadata ----------
+meta_path() { printf '%s' "$CFG_DIR/install.json"; }
+meta_repo() {
+  local p; p="$(meta_path)"
+  [[ -f "$p" ]] || return 1
+  jq -er '.repo // empty' "$p" 2>/dev/null
+}
+write_meta() {
+  local repo="$1"
+  ensure_cfg
+  local tmp; tmp="$(meta_path).tmp.$$"
+  jq -n --arg repo "$repo" --arg version "$PIBOX_VERSION" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{repo:$repo, version:$version, installed_at:$at}' >"$tmp"
+  chmod 600 "$tmp"; mv "$tmp" "$(meta_path)"
+}
+
+# ---------- agent dir ----------
+# Build an ephemeral agent dir that keeps every piece of the user's config
+# (settings, extensions, packages, themes, sessions) but carries its own
+# auth.json, so the provider key never has to live in the environment.
+prepare_agent_dir() {
+  local dir entry base
+  local root="${PIBOX_BASE_DIR:-$AGENT_DIR}"
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/pibox.XXXXXX")"
+  chmod 700 "$dir"
+  for entry in "$root"/* "$root"/.[!.]*; do
+    [[ -e "$entry" ]] || continue
+    base="$(basename "$entry")"
+    case "$base" in
+      auth.json|auth.json.*) continue ;;
+    esac
+    ln -s "$entry" "$dir/$base"
+  done
+  printf '%s' "$dir"
+}
+
+# ---------- sessions ----------
+session_base() {
+  printf '%s' "${PI_SESSION_DIR:-$AGENT_DIR/sessions}"
+}
+session_dir() {
+  local base p
+  base="$(session_base)"
+  # use the physical path: macOS /tmp is a symlink to /private/tmp
+  p="$(cd "$PWD" 2>/dev/null && pwd -P || printf '%s' "$PWD")"
+  p="${p#/}"
+  p="${p//\//-}"
+  printf '%s/--%s--' "$base" "$p"
+}
+session_files() {
+  local dir; dir="$(session_dir)"
+  [[ -d "$dir" ]] || return 0
+  find "$dir" -maxdepth 1 -type f -name '*.jsonl' 2>/dev/null
+}
+session_count() {
+  local n
+  n="$(session_files | wc -l | tr -d ' ')"
+  printf '%s' "${n:-0}"
+}
+latest_session() {
+  session_files | while IFS= read -r f; do
+    printf '%s\t%s\n' "$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null || echo 0)" "$f"
+  done | sort -rn | head -n1 | cut -f2-
+}
+has_session_flag() {
+  local a
+  for a in "$@"; do
+    case "$a" in
+      -c|--continue|-r|--resume|--resume=*|--session|--session=*|--fork|--fork=*|--no-session|--session-dir|--session-dir=*) return 0 ;;
+    esac
+  done
+  return 1
+}
+# Sets SESSION_CHOICE to continue | new | quit.
+decide_session() {
+  SESSION_CHOICE="${1:-ask}"
+  [[ "$SESSION_CHOICE" == ask ]] || return 0
+  if has_session_flag "${@:2}"; then
+    SESSION_CHOICE=explicit
+    return 0
+  fi
+  local n; n="$(session_count)"
+  if [[ "$n" == 0 ]]; then
+    SESSION_CHOICE=new
+    return 0
+  fi
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    SESSION_CHOICE=new
+    return 0
+  fi
+  local latest name when size
+  latest="$(latest_session)"
+  name="$(basename "${latest:-session}")"
+  when="$(printf '%s' "$name" | cut -c1-16 | tr 'T' ' ')"
+  size="$(du -h "${latest:-/dev/null}" 2>/dev/null | cut -f1)"
+  printf '\n' >&2
+  info "found $n previous session(s) for this folder"
+  dim "latest: $when  ($size)  $name"
+  printf '  [Enter] continue last   [n] new session   [q] quit: ' >&2
+  local reply
+  read -r reply || reply=""
+  case "$reply" in
+    q|Q) SESSION_CHOICE=quit ;;
+    n|N|new) SESSION_CHOICE=new ;;
+    *) SESSION_CHOICE=continue ;;
+  esac
+}
+
+
+# ---------- git workspace ----------
+workspace_src() { printf '%s' "${WORKSPACE:-$PWD}"; }
+
+workspace_mode_from_manifest() {
+  local file="$1/pibox.toml"
+  [[ -f "$file" ]] || return 0
+  python3 - "$file" <<'PYEOF'
+import re, sys
+text = open(sys.argv[1]).read()
+m = re.search(r'^\[workspace\]\s*$(.*?)(?=^\[|\Z)', text, re.M | re.S)
+if m:
+    mm = re.search(r'^\s*mode\s*=\s*"([^"]+)"', m.group(1), re.M)
+    if mm:
+        print(mm.group(1))
+PYEOF
+}
+
+GIT_WORKDIR=""; GIT_SESSION=""; GIT_BRANCH=""; GIT_BASE=""; GIT_ROOT=""
+
+prepare_git_worktree() {
+  local root base f
+  root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -n "$root" ]] || die "--workspace git requires a git repository"
+  if [[ "$root" != "$PWD" ]]; then
+    warn "using repository root: $root"
+  fi
+  GIT_ROOT="$root"
+  GIT_SESSION="$(date +%Y%m%d-%H%M%S)-$RANDOM"
+  GIT_BRANCH="pibox/$GIT_SESSION"
+  mkdir -p "$root/.pibox/work"
+  GIT_WORKDIR="$root/.pibox/work/$GIT_SESSION"
+
+  if ! git -C "$root" check-ignore -q .pibox 2>/dev/null; then
+    warn ".pibox/ is not in .gitignore; add it so the worktree is not committed"
+  fi
+
+  base="$(git -C "$root" stash create 2>/dev/null || true)"
+  [[ -n "$base" ]] || base="$(git -C "$root" rev-parse HEAD 2>/dev/null)" \
+    || die "cannot resolve HEAD; make an initial commit first"
+
+  git -C "$root" worktree add --detach "$GIT_WORKDIR" "$base" >&2 \
+    || die "git worktree add failed"
+
+  # untracked but not ignored; .env in .gitignore is therefore excluded
+  git -C "$root" ls-files -o --exclude-standard -z | while IFS= read -r -d '' f; do
+    mkdir -p "$GIT_WORKDIR/$(dirname "$f")"
+    cp -p "$root/$f" "$GIT_WORKDIR/$f" 2>/dev/null || true
+  done
+
+  # baseline commit so our copied untracked files are not mistaken for agent edits
+  if [[ -n "$(git -C "$GIT_WORKDIR" status --porcelain 2>/dev/null)" ]]; then
+    git -C "$GIT_WORKDIR" add -A >/dev/null 2>&1 || true
+    git -C "$GIT_WORKDIR" -c user.name=pibox -c user.email=pibox@localhost \
+      commit -m "pibox snapshot $GIT_SESSION" >/dev/null 2>&1 || true
+  fi
+  GIT_BASE="$(git -C "$GIT_WORKDIR" rev-parse HEAD)"
+
+  WORKSPACE="$GIT_WORKDIR"
+  info "git workspace: $GIT_WORKDIR"
+  dim "base: ${GIT_BASE:0:8}; ignored files (.env) are not copied"
+}
+
+GIT_FINALIZED=0
+finalize_git_workspace() {
+  [[ -n "$GIT_WORKDIR" ]] || return 0
+  [[ "$GIT_FINALIZED" == 1 ]] && return 0
+  GIT_FINALIZED=1
+  if [[ -z "$(git -C "$GIT_WORKDIR" status --porcelain 2>/dev/null)" ]]; then
+    info "no changes in the git workspace"
+    dim "kept for inspection: $GIT_WORKDIR"
+    return 0
+  fi
+  git -C "$GIT_WORKDIR" checkout -b "$GIT_BRANCH" >/dev/null 2>&1 || true
+  git -C "$GIT_WORKDIR" add -A >/dev/null 2>&1 || true
+  git -C "$GIT_WORKDIR" -c user.name=pibox -c user.email=pibox@localhost \
+    commit -m "pibox session $GIT_SESSION" >/dev/null 2>&1 || true
+  info "changes committed to $GIT_BRANCH"
+  dim "review: git diff $GIT_BASE..$GIT_BRANCH"
+  dim "merge:  git merge $GIT_BRANCH"
+  dim "remove: git worktree remove $GIT_WORKDIR"
+}
+
+PIBOX_CLEAN_CONTAINER=""; PIBOX_CLEAN_DIR=""
+on_exit() {
+  [[ -n "${PIBOX_CLEAN_CONTAINER:-}" ]] && docker rm -f "$PIBOX_CLEAN_CONTAINER" >/dev/null 2>&1 || true
+  [[ -n "${PIBOX_CLEAN_DIR:-}" ]] && rm -rf "$PIBOX_CLEAN_DIR" || true
+  finalize_git_workspace || true
+}
+
+cmd_work() {
+  local action="${1:-list}" root
+  root="$(project_root || true)"; [[ -n "$root" ]] || root="$PWD"
+  local dir="$root/.pibox/work"
+  case "$action" in
+    list)
+      [[ -d "$dir" ]] || { info "no git workspaces"; return 0; }
+      local d n
+      for d in "$dir"/*; do
+        [[ -d "$d" ]] || continue
+        n="$(git -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+        printf '%s  changes=%s  %s\n' "$(basename "$d")" "${n:-?}" "$d"
+      done
+      ;;
+    clean)
+      [[ -d "$dir" ]] || { info "no git workspaces"; return 0; }
+      local d
+      for d in "$dir"/*; do
+        [[ -d "$d" ]] || continue
+        if [[ -z "$(git -C "$d" status --porcelain 2>/dev/null)" ]]; then
+          git -C "$root" worktree remove "$d" >/dev/null 2>&1 || rm -rf "$d"
+          dim "removed $d"
+        else
+          warn "keeping $d (uncommitted changes)"
+        fi
+      done
+      git -C "$root" worktree prune >/dev/null 2>&1 || true
+      ;;
+    *) die "work: use list|clean" ;;
+  esac
+}
+
+
+resolve_images() {
+  local v="${PIBOX_VARIANT:-$(cfg_default variant)}"
+  v="${v:-standard}"
+  case "$v" in
+    standard)
+      IMAGE="pibox-sandbox"; IMAGE_FULL="pibox-full" ;;
+    minimal)
+      IMAGE="pibox-sandbox-min"; IMAGE_FULL="pibox-full-min" ;;
+    dev)
+      IMAGE="pibox-sandbox-dev"; IMAGE_FULL="pibox-full-dev" ;;
+    alpine)
+      IMAGE="$(cfg_default image)"; IMAGE_FULL="$(cfg_default image_full)"
+      [[ -n "$IMAGE" ]] || IMAGE="pibox-sandbox-min"
+      [[ -n "$IMAGE_FULL" ]] || IMAGE_FULL="pibox-full-min" ;;
+    *)
+      die "unknown variant '$v' (standard, alpine, minimal, dev)" ;;
+  esac
+  IMAGE="${PIBOX_IMAGE:-$IMAGE}"
+  IMAGE_FULL="${PIBOX_IMAGE_FULL:-$IMAGE_FULL}"
+}
+
+# ---------- recovery ----------
+our_containers() {
+  { docker ps -a --filter 'label=pibox=1' --format '{{.ID}}\t{{.Names}}\t{{.Status}}' 2>/dev/null || true
+    docker ps -a --filter 'name=^pibox-' --format '{{.ID}}\t{{.Names}}\t{{.Status}}' 2>/dev/null || true
+  } | sort -u
+}
+
+stale_tmp_dirs() {
+  local base d
+  for base in "${TMPDIR:-/tmp}" /tmp; do
+    for d in "$base"/pibox.*; do
+      [[ -d "$d" ]] || continue
+      if find "$d" -maxdepth 0 -mmin +10 2>/dev/null | grep -q .; then
+        printf '%s\n' "$d"
+      fi
+    done
+  done | sort -u
+}
+
+clean_containers() {
+  local force="${1:-0}" id name status
+  local lines; lines="$(our_containers)"
+  [[ -n "$lines" ]] || return 0
+  while IFS=$'\t' read -r id name status; do
+    [[ -n "$id" ]] || continue
+    if [[ "$status" == Up* && "$force" != 1 ]]; then
+      warn "running container kept: $name ($status) - use --force to remove"
+      continue
+    fi
+    docker rm -f "$id" >/dev/null 2>&1 && dim "removed container $name ($status)"
+  done <<<"$lines"
+}
+
+clean_tmp() {
+  local d
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    if [[ -f "$d/auth.json" ]]; then
+      dd if=/dev/zero of="$d/auth.json" bs=1024 count=1 conv=notrunc 2>/dev/null || true
+    fi
+    rm -rf "$d" && dim "removed $d"
+  done < <(stale_tmp_dirs)
+}
+
+env_incomplete() {
+  local root; root="$(project_root || true)"
+  [[ -n "$root" && -f "$(lock_path "$root")" ]] || return 1
+  local n; n="$(jq -r '.extensions | length' "$(lock_path "$root")" 2>/dev/null || echo 0)"
+  [[ "$n" -gt 0 ]] || return 1
+  [[ -d "$(env_path "$root")/npm/node_modules" ]] && return 1
+  return 0
+}
+
+cmd_recover() {
+  local fix=0
+  [[ "${1:-}" == "--fix" ]] && fix=1
+  local root; root="$(project_root || true)"
+
+  info "containers"
+  local cl; cl="$(our_containers)"
+  if [[ -z "$cl" ]]; then dim "none"; else printf '%s\n' "$cl" | sed 's/^/  /'; fi
+
+  info "temporary agent dirs"
+  local tl; tl="$(stale_tmp_dirs)"
+  if [[ -z "$tl" ]]; then dim "none older than 10 minutes"; else printf '%s\n' "$tl" | sed 's/^/  /'; fi
+
+  info "git workspaces"
+  if [[ -n "$root" && -d "$root/.pibox/work" ]]; then
+    local d n
+    for d in "$root/.pibox/work"/*; do
+      [[ -d "$d" ]] || continue
+      n="$(git -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+      printf '  %s  changes=%s\n' "$(basename "$d")" "${n:-?}"
+    done
+  else
+    dim "none"
+  fi
+
+  info "environment"
+  if env_incomplete; then
+    warn "incomplete (lock lists extensions but the environment is missing)"
+  else
+    dim "ok, or not configured"
+  fi
+
+  info "sessions"
+  printf '  %s session(s) for this folder\n' "$(session_count)"
+  dim "list: pibox sessions list"
+
+  if [[ "$fix" == 1 ]]; then
+    info "applying safe fixes"
+    clean_containers 0
+    clean_tmp
+    [[ -n "$root" ]] && cmd_work clean
+    if env_incomplete; then
+      info "rebuilding incomplete environment"
+      seed_env "$root"
+      sync_env "$root"
+    fi
+    info "recovery complete"
+  else
+    dim "apply safe fixes with: pibox recover --fix"
+  fi
+}
+
+cmd_clean() {
+  local do_containers=1 do_tmp=1 do_work=0 do_env=0 force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --containers) do_containers=1; shift ;;
+      --no-containers) do_containers=0; shift ;;
+      --tmp) do_tmp=1; shift ;;
+      --no-tmp) do_tmp=0; shift ;;
+      --work) do_work=1; shift ;;
+      --env) do_env=1; shift ;;
+      --force) force=1; shift ;;
+      --all) do_containers=1; do_tmp=1; do_work=1; do_env=1; shift ;;
+      *) die "clean: unknown option $1" ;;
+    esac
+  done
+  [[ "$do_containers" == 1 ]] && clean_containers "$force"
+  [[ "$do_tmp" == 1 ]] && clean_tmp
+  [[ "$do_work" == 1 ]] && cmd_work clean
+  if [[ "$do_env" == 1 ]]; then
+    local root; root="$(project_root || true)"
+    [[ -n "$root" ]] || die "clean --env: no pibox.toml found"
+    rm -rf "$(env_path "$root")" && dim "removed $(env_path "$root")"
+    dim "rebuild with: pibox sync"
+  fi
+  info "clean complete"
+}
+
+# ---------- sessions ----------
+session_id_from_path() {
+  local base; base="$(basename "$1" .jsonl)"
+  printf '%s' "${base##*_}"
+}
+
+session_pick() {
+  local want="${1:-latest}" dir f
+  dir="$(session_dir)"
+  [[ -d "$dir" ]] || die "no sessions for this folder"
+  if [[ "$want" == latest ]]; then
+    latest_session
+    return
+  fi
+  for f in "$dir"/*.jsonl; do
+    [[ -e "$f" ]] || continue
+    case "$(session_id_from_path "$f")" in
+      "$want"*) printf '%s' "$f"; return 0 ;;
+    esac
+  done
+  die "no session matching '$want'"
+}
+
+default_model_from_settings() {
+  jq -r 'if .defaultProvider and .defaultModel then .defaultProvider + "/" + .defaultModel else empty end' \
+    "$AGENT_DIR/settings.json" 2>/dev/null || true
+}
+
+cmd_sessions() {
+  local action="${1:-list}"; shift || true
+  case "$action" in
+    list)
+      local dir f ts size id count=0
+      dir="$(session_dir)"
+      [[ -d "$dir" ]] || { info "no sessions for this folder"; return 0; }
+      for f in "$dir"/*.jsonl; do
+        [[ -e "$f" ]] || continue
+        count=$((count+1))
+        ts="$(basename "$f" | cut -c1-19 | tr 'T' ' ' | sed -E 's/^([0-9]{4}-[0-9]{2}-[0-9]{2}) ([0-9]{2})-([0-9]{2})-([0-9]{2})$/\1 \2:\3:\4/')"
+        size="$(du -h "$f" 2>/dev/null | cut -f1)"
+        id="$(session_id_from_path "$f")"
+        printf '%s  %6s  %s\n' "$ts" "$size" "$id"
+      done
+      [[ "$count" == 0 ]] && info "no sessions for this folder"
+      ;;
+    resume)
+      local want="latest" model=""
+      local -a extra=()
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --model) model="$2"; shift 2 ;;
+          --) shift; extra=("$@"); break ;;
+          *) want="$1"; shift ;;
+        esac
+      done
+      local f; f="$(session_pick "$want")"
+      [[ -n "$model" ]] || model="$(default_model_from_settings)"
+      [[ -n "$model" ]] || die "pass --model provider/model (no default in settings.json)"
+      info "resuming $(session_id_from_path "$f")"
+      local -a args=(run pi --model "$model")
+      args+=(--)
+      args+=(--session "$f")
+      args+=(${extra[@]+"${extra[@]}"})
+      exec "$0" ${args[@]+"${args[@]}"}
+      ;;
+    export)
+      local want="${1:-latest}" out="${2:-}"
+      local f; f="$(session_pick "$want")"
+      [[ -n "$out" ]] || out="pi-session-$(session_id_from_path "$f").html"
+      pi --export "$f" "$out" >/dev/null 2>&1 || die "pi --export failed"
+      info "exported to $out"
+      ;;
+    *) die "sessions: use list|resume|export" ;;
+  esac
+}
+
+
+# ---------- mode preflight ----------
+sandbox_pi_family() {
+  local real
+  real="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$SANDBOX_PI" 2>/dev/null || printf '%s' "$SANDBOX_PI")"
+  case "$real" in
+    *@earendil-works*) echo earendil ;;
+    *) echo fleetagent ;;
+  esac
+}
+
+global_package_count() {
+  jq -r '.packages | length? // 0' "$AGENT_DIR/settings.json" 2>/dev/null || echo 0
+}
+
+PREFLIGHT_MODE=""; PREFLIGHT_NO_EXT=0
+
+preflight_remote() {
+  [[ "$NO_EXT" == 1 ]] && return 0
+  local n; n="$(global_package_count)"
+  [[ "${n:-0}" -gt 0 ]] || return 0
+  [[ "$(sandbox_pi_family)" == earendil ]] && return 0
+
+  warn "your global pi has $n extension(s) built for @earendil-works"
+  warn "remote mode uses the @fleetagent sandbox build and cannot load them"
+  printf '  choose one:\n' >&2
+  printf '    1) pibox migrate && pibox run --mode container   sandboxed, extensions work\n' >&2
+  printf '    2) pibox run --mode native                       no sandbox, exact setup\n' >&2
+  printf '    3) pibox run --no-extensions                     sandboxed, extensions off\n' >&2
+
+  if [[ -t 0 && -t 1 ]]; then
+    printf '  choice [1/2/3/q]: ' >&2
+    local a; read -r a
+    case "$a" in
+      1) exit 0 ;;
+      2) PREFLIGHT_MODE=native ;;
+      3) PREFLIGHT_NO_EXT=1 ;;
+      q|Q) exit 0 ;;
+      *) return 5 ;;
+    esac
+    return 0
+  fi
+  return 5
+}
+
+# ---------- workspace guard ----------
+guard_workspace() {
+  local target="$1" force="${2:-0}"
+  [[ "$force" == 1 ]] && return 0
+  if [[ "$target" == "$HOME" || "$target" == "/" ]]; then
+    die "refusing to mount $target as the agent workspace (use --force to override)"
+  fi
+}
+
+# ---------- commands ----------
+cmd_init() {
+  local dry=0 reg=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --register) reg=1; shift ;;
+      *) die "init: unknown option $1" ;;
+    esac
+  done
+
+  local auth="$AGENT_DIR/auth.json"
+  [[ -f "$auth" ]] || die "no auth.json at $auth (nothing to import)"
+
+  info "inspecting $auth"
+  local providers
+  providers="$(jq -r 'to_entries[] | "\(.key)\t\(.value.type // "api_key")"' "$auth" 2>/dev/null || true)"
+  [[ -n "$providers" ]] || die "auth.json has no provider entries"
+
+  local registered=0 skipped=0 needed=0
+  while IFS=$'\t' read -r provider kind; do
+    [[ -n "$provider" ]] || continue
+    if [[ "$kind" != "api_key" ]]; then
+      dim "$provider: $kind (OAuth) - leave this to 'pi /login', not the keyring"
+      skipped=$((skipped + 1)); continue
+    fi
+    if ! provider_env "$provider" >/dev/null; then
+      warn "$provider: no known environment variable, add it to provider_env()"; continue
+    fi
+    if skey_has "$provider"; then
+      dim "$provider: already in the keyring"
+      cfg_set "$provider" env "$(provider_env "$provider")"
+      registered=$((registered + 1)); continue
+    fi
+    needed=$((needed + 1))
+    if [[ "$dry" == 1 ]]; then
+      dim "would run: skey set $provider default"
+      continue
+    fi
+    if [[ "$reg" != 1 ]]; then
+      warn "$provider: not registered"
+      dim "run: skey set $provider default    (or re-run with --register)"
+      continue
+    fi
+    info "registering $provider (input hidden)"
+    skey set "$provider" default
+    local v; v="$(skey_variants "$provider" | head -n1)"
+    cfg_set "$provider" variant "$v"
+    cfg_set "$provider" env "$(provider_env "$provider")"
+    registered=$((registered + 1))
+  done <<<"$providers"
+
+  if [[ "$dry" == 1 ]]; then
+    info "dry run: $registered already registered, $needed to register, $skipped OAuth"
+  else
+    info "done: $registered in keyring, $needed pending, $skipped OAuth"
+    dim "next: pibox migrate --dry-run"
+  fi
+}
+
+cmd_migrate() {
+  local dry=0 register=0 do_sync=1 keep_auth=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --register) register=1; shift ;;
+      --no-sync) do_sync=0; shift ;;
+      --keep-auth) keep_auth=1; shift ;;
+      *) die "migrate: unknown option $1" ;;
+    esac
+  done
+
+  local auth="$AGENT_DIR/auth.json" settings="$AGENT_DIR/settings.json"
+  local root="$PWD" tmp count
+
+  info "inspecting $AGENT_DIR"
+
+  # 1. extensions
+  local packages=()
+  if [[ -f "$settings" ]]; then
+    while IFS= read -r src; do [[ -n "$src" ]] && packages+=("$src"); done \
+      < <(jq -r '.packages[]? // empty' "$settings" 2>/dev/null)
+  fi
+  printf '  extensions: %d\n' "${#packages[@]}"
+  local src name ver
+  for src in ${packages[@]+"${packages[@]}"}; do
+    case "$src" in
+      npm:*)
+        name="$(printf '%s' "${src#npm:}" | sed 's/@[^@/]*$//')"
+        ver="$(jq -r .version "$AGENT_DIR/npm/node_modules/$name/package.json" 2>/dev/null || true)"
+        ;;
+      *) name="$src"; ver="$(printf '%s' "$src" | sed -n 's/.*@//p')"; [[ -n "$ver" ]] || ver=path ;;
+    esac
+    printf '    %-45s %s\n' "$src" "${ver:-unknown}"
+  done
+
+  # 2. interface files
+  printf '  interface:\n'
+  local f d
+  for f in settings.json mcp.json AGENTS.md SYSTEM.md models-store.json; do
+    [[ -e "$AGENT_DIR/$f" ]] && printf '    file  %s\n' "$f"
+  done
+  for d in extensions skills rules prompt-templates themes statusline; do
+    [[ -e "$AGENT_DIR/$d" ]] && printf '    dir   %s/\n' "$d"
+  done
+
+  # 3. auth entries
+  local auth_plan=""
+  if [[ -f "$auth" ]]; then
+    auth_plan="$(jq -r 'to_entries[] |
+        ( .value.key // "" ) as $k |
+        ( if   ($k | startswith("$")) then "keep-env"
+          elif ($k | startswith("!")) then "remove-cmd"
+          elif ($k == "")             then "remove-empty"
+          else                             "remove-literal" end ) as $kind |
+        select(.value.type == "api_key") |
+        "\($kind)\t\(.key)"' "$auth" 2>/dev/null || true)"
+    printf '  credentials:\n'
+    if [[ -z "$auth_plan" ]]; then
+      printf '    (none in auth.json)\n'
+    else
+      printf '%s\n' "$auth_plan" | while IFS=$'\t' read -r kind who; do
+        printf '    %-16s %s\n' "$kind" "$who"
+      done
+    fi
+  fi
+
+  if [[ "$dry" == 1 ]]; then
+    info "dry run: would write $root/pibox.toml, pibox.lock, and .pibox/env"
+    return 0
+  fi
+
+  # 4. build the lock from global packages
+  tmp="$(mktemp)"
+  printf '{"version":1,"pi":"%s","extensions":{}}\n' "$(pi_version)" >"$tmp"
+  for src in ${packages[@]+"${packages[@]}"}; do
+    case "$src" in
+      npm:*)
+        name="$(printf '%s' "${src#npm:}" | sed 's/@[^@/]*$//')"
+        ver="$(jq -r .version "$AGENT_DIR/npm/node_modules/$name/package.json" 2>/dev/null || true)"
+        [[ -n "$ver" ]] || ver="$(resolve_source_version "$src")"
+        ;;
+      *)
+        ver="$(printf '%s' "$src" | sed -n 's/.*@//p')"
+        [[ -n "$ver" ]] || ver=path
+        src="$(printf '%s' "$src" | sed 's/@[^@/]*$//')"
+        ;;
+    esac
+    jq --arg s "$src" --arg v "$ver" '.extensions[$s] = $v' "$tmp" >"$tmp.2" && mv "$tmp.2" "$tmp"
+  done
+
+  # merge with an existing project lock; project entries win
+  if [[ -f "$(lock_path "$root")" ]]; then
+    jq -s '.[0] as $e | .[1] as $g | $g | .extensions = ($g.extensions * $e.extensions)' \
+      "$(lock_path "$root")" "$tmp" >"$tmp.3" && mv "$tmp.3" "$(lock_path "$root")"
+    rm -f "$tmp"
+  else
+    mv "$tmp" "$(lock_path "$root")"
+  fi
+  write_manifest "$root" "$(lock_path "$root")"
+  info "wrote $(manifest_path "$root") and $(lock_path "$root")"
+
+  # 5. register credentials if asked
+  if [[ "$register" == 1 && -f "$auth" ]]; then
+    local provider
+    while IFS= read -r provider; do
+      [[ -n "$provider" ]] || continue
+      if skey_has "$provider"; then dim "$provider: already in keyring"; continue; fi
+      if provider_env "$provider" >/dev/null 2>&1; then
+        info "registering $provider"
+        skey set "$provider" default
+        cfg_set "$provider" variant default
+        cfg_set "$provider" env "$(provider_env "$provider")"
+      else
+        warn "$provider: unknown provider, skipped"
+      fi
+    done < <(jq -r 'to_entries[] | select(.value.type == "api_key") | .key' "$auth" 2>/dev/null)
+  fi
+
+  # 6. clean auth.json (backup + classify)
+  if [[ "$keep_auth" != 1 && -f "$auth" ]]; then
+    local backup="$auth.backup.$(date +%Y%m%d%H%M%S)"
+    cp -p "$auth" "$backup"; chmod 600 "$backup"
+    info "backup written: $backup"
+    jq 'with_entries(select(.value.type != "api_key" or ((.value.key // "") | startswith("$"))))' \
+      "$auth" >"$auth.tmp.$$"
+    chmod 600 "$auth.tmp.$$"; mv "$auth.tmp.$$" "$auth"
+    dim "auth.json keeps OAuth entries and \$ENV references"
+  fi
+
+  # 7. build the environment
+  if [[ "$do_sync" == 1 ]]; then
+    sync_env "$root"
+  fi
+  info "migration complete"
+}
+
+scan_plaintext() {
+  local auth="$AGENT_DIR/auth.json"
+  [[ -f "$auth" ]] || return 0
+  local hits=0
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    printf '  plaintext-looking key in auth.json: %s\n' "$line" >&2
+    hits=$((hits + 1))
+  done < <(jq -r 'to_entries[] | select(.value.key != null) | select(.value.key | test("^(sk-|sk_|ghp_|gho_|ghs_|github_pat_|oc_sk_|xox|glpat-|[A-Za-z0-9_-]{40,})")) | .key' "$auth" 2>/dev/null || true)
+  [[ "$hits" -gt 0 ]] && return 1
+  return 0
+}
+
+cmd_doctor() {
+  printf 'pibox %s\n' "$PIBOX_VERSION"
+  printf 'config      %s\n' "$CFG"
+  printf 'agent dir   %s\n' "$AGENT_DIR"
+  printf 'pi (host)   %s\n' "$(command -v pi || echo missing) $(pi --version 2>&1 | head -1 || true)"
+  printf 'pi (sandbox)%s %s\n' " $SANDBOX_PI" "$("$SANDBOX_PI" --version 2>&1 | head -1 || true)"
+  printf 'docker      %s\n' "$(docker --version 2>/dev/null || echo missing)"
+  printf 'lima        %s\n' "$(limactl --version 2>/dev/null | head -1 || echo missing)"
+  printf 'lima vm     %s\n' "$(lima_state 2>/dev/null || echo unknown)"
+  printf 'mode        %s / %s\n' "$(cfg_default runtime || true)" "$(cfg_default mode || true)"
+  printf 'variant     %s\n' "$(cfg_default variant || echo standard)"
+
+  printf '\nkeyring (skey):\n'
+  if command -v skey >/dev/null 2>&1; then
+    skey list 2>/dev/null | sed 's/^/  /' || true
+  else
+    printf '  missing\n'
+  fi
+
+  printf '\nsecurity checks:\n'
+  local bad=0
+  if [[ -f "$AGENT_DIR/auth.json" ]]; then
+    local perm; perm="$(stat -f '%Lp' "$AGENT_DIR/auth.json" 2>/dev/null || stat -c '%a' "$AGENT_DIR/auth.json" 2>/dev/null || echo '?')"
+    printf '  auth.json permissions: %s\n' "$perm"
+    [[ "$perm" != "600" ]] && { warn "auth.json should be 600"; bad=1; }
+    if ! scan_plaintext >/dev/null 2>&1; then
+      warn "auth.json contains plaintext credentials (run: pibox migrate)"
+      bad=1
+    fi
+    local cmdrefs
+    cmdrefs="$(jq -r 'to_entries[] | select((.value.key // "") | startswith("!")) | .key' "$AGENT_DIR/auth.json" 2>/dev/null || true)"
+    if [[ -n "$cmdrefs" ]]; then
+      warn "auth.json has command references that cannot succeed (run: pibox migrate)"
+      printf '%s\n' "$cmdrefs" | sed 's/^/  /' >&2
+      bad=1
+    fi
+  fi
+  if [[ "$(stat -f '%Lp' "$CFG" 2>/dev/null || stat -c '%a' "$CFG" 2>/dev/null || echo 600)" != "600" ]]; then
+    warn "config should be 600"; bad=1
+  fi
+  [[ "$bad" == 0 ]] && printf '  ok\n'
+}
+
+normalize_features() {
+  local raw="${1:-}" norm="," f out=""
+  raw="${raw// /}"
+  local IFS=','
+  for f in $raw; do
+    case "$f" in
+      "") : ;;
+      python|py|uv) norm+="python," ;;
+      node|js|javascript|typescript|ts) norm+="node," ;;
+      go|golang) norm+="go," ;;
+      rust|rs) norm+="rust," ;;
+      build|cc|cpp|gcc) norm+="build," ;;
+      cli|tools) norm+="cli," ;;
+      all|dev) norm+="python,node,go,rust,build,cli," ;;
+      none|minimal) : ;;
+      *) die "unknown feature '$f' (python, node, go, rust, build, cli, all)" ;;
+    esac
+  done
+  for f in python node go rust build cli; do
+    case "$norm" in *",$f,"*) out+="$f," ;; esac
+  done
+  printf '%s' "${out%,}"
+}
+
+tag_for_features() {
+  local feats="$1" t="dev"
+  [[ -z "$feats" ]] && { echo min; return; }
+  [[ "$feats" == "python,node,go,rust,build,cli" ]] && { echo dev; return; }
+  case ",$feats," in *",python,"*) t+="-py" ;; esac
+  case ",$feats," in *",node,"*) t+="-js" ;; esac
+  case ",$feats," in *",go,"*) t+="-go" ;; esac
+  case ",$feats," in *",rust,"*) t+="-rs" ;; esac
+  case ",$feats," in *",build,"*) t+="-cc" ;; esac
+  case ",$feats," in *",cli,"*) t+="-cli" ;; esac
+  echo "$t"
+}
+
+alpine_write_dockerfile() {
+  local feats="$1" sandbox="$2" out="$3"
+  local pkgs="bash ca-certificates curl git ripgrep fd libstdc++ jq less"
+  local desc="" post_cmds="" post_line="" daemon_env="" cmd="" agent_pkg agent_ver
+
+  case ",$feats," in *",python,"*) pkgs+=" python3 py3-pip"; desc+="python3, pip, uv; " ;; esac
+  case ",$feats," in *",node,"*)   pkgs+=" nodejs npm";        desc+="node, npm, pnpm, yarn, TypeScript, tsx; " ;; esac
+  case ",$feats," in *",go,"*)     pkgs+=" go gopls delve";    desc+="go, gopls, delve; " ;; esac
+  case ",$feats," in *",rust,"*)   pkgs+=" rust cargo rustfmt rust-clippy rust-analyzer"; desc+="rust, cargo, rustfmt, clippy, rust-analyzer; " ;; esac
+  case ",$feats," in *",build,"*)  pkgs+=" build-base";        desc+="gcc, g++, make; " ;; esac
+  case ",$feats," in *",cli,"*)    pkgs+=" bat eza sd dust procs bottom delta hyperfine tokei watchexec hexyl zoxide just"; desc+="rg, fd, bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide, just; " ;; esac
+  desc="${desc%; }"
+
+  case ",$feats," in *",python,"*) post_cmds+="python3 -m pip install --break-system-packages --no-cache-dir uv" ;; esac
+  case ",$feats," in *",node,"*)
+    [[ -n "$post_cmds" ]] && post_cmds+=" && "
+    post_cmds+="npm install -g pnpm yarn typescript tsx && npm cache clean --force" ;;
+  esac
+  [[ -n "$post_cmds" ]] && post_line="RUN $post_cmds"
+
+  if [[ "$sandbox" == 1 ]]; then
+    agent_pkg="@fleetagent/pi-coding-agent"; agent_ver="0.2.15"
+    daemon_env='ENV HOME=/home/node \
+    NPM_CONFIG_PREFIX=/home/node/.npm-global \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    GOPATH=/home/node/go \
+    GOCACHE=/home/node/.cache/go-build \
+    CARGO_HOME=/home/node/.cargo \
+    PATH=/home/node/go/bin:/home/node/.cargo/bin:/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PI_DAEMON_HOST=0.0.0.0 \
+    PI_DAEMON_PORT=8787 \
+    PI_DAEMON_CWD=/workspace \
+    PI_DAEMON_TEMP_ROOT=/tmp \
+    TMPDIR=/tmp \
+    PI_DAEMON_ALLOW_INSECURE_TRANSPORT=1 \
+    PI_DAEMON_ALLOW_PROCESS_EXEC=1
+EXPOSE 8787'
+    cmd='CMD ["--daemon"]'
+  else
+    agent_pkg="@earendil-works/pi-coding-agent"; agent_ver="1.5.2"
+    daemon_env='ENV HOME=/home/node TERM=xterm-256color \
+    NPM_CONFIG_PREFIX=/home/node/.npm-global \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    GOPATH=/home/node/go \
+    GOCACHE=/home/node/.cache/go-build \
+    CARGO_HOME=/home/node/.cargo \
+    PATH=/home/node/go/bin:/home/node/.cargo/bin:/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+    cmd=''
+  fi
+
+  cat >"$out" <<DOCKER
+FROM oven/bun:1-alpine AS build
+RUN apk add --no-cache nodejs npm
+RUN npm install -g --ignore-scripts $agent_pkg@$agent_ver
+WORKDIR /usr/local/lib/node_modules/$agent_pkg
+RUN bun build --compile --minify ./dist/bun/cli.js --outfile /out/pi \\
+    || bun build --compile --minify ./dist/cli.js --outfile /out/pi
+RUN mkdir -p /out/dist \\
+    && (cp -R dist/core /out/dist/ 2>/dev/null || true) \\
+    && (cp -R dist/modes /out/dist/ 2>/dev/null || true) \\
+    && (cp "\$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \\
+    && cp package.json /out/
+FROM alpine:3.20
+RUN --mount=type=cache,target=/var/cache/apk \\
+    apk update && apk add $pkgs
+RUN adduser -D -u 1000 -h /home/node node
+RUN mkdir -p /home/node/.pi /home/node/.npm-global /home/node/go /home/node/.cache/go-build /home/node/.cargo && chown -R 1000:1000 /home/node
+$post_line
+RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'NOTE'
+# Sandbox environment
+
+- Alpine Linux. Use apk, not apt-get.
+- Preinstalled: $desc.
+- Prefer modern Rust CLI tools over busybox/GNU equivalents:
+  rg (grep), fd (find), bat (cat), sd (sed), eza (ls), dust (du), procs (ps),
+  btm (top), delta (diff), hyperfine (time), tokei (loc), hexyl (hex), zoxide.
+- Python commands are available only if python was included in the image.
+- Node/TS, Go and Rust commands are available only if those features were included.
+- The project is mounted at /workspace; it is the only host path you can reach.
+- You run as uid 1000; system packages need --root and: apk add --no-cache <pkg>
+NOTE
+COPY --from=build /out /opt/pi
+RUN ln -s /opt/pi/pi /usr/local/bin/pi
+$daemon_env
+WORKDIR /workspace
+USER node
+ENTRYPOINT ["pi"]
+$cmd
+DOCKER
+}
+
+cmd_bootstrap() {
+  local variant="standard" with_list=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --with) variant="alpine"; with_list="$2"; shift 2 ;;
+      --minimal|--alpine) variant="alpine"; with_list="none"; shift ;;
+      --dev|--all) variant="alpine"; with_list="all"; shift ;;
+      --standard) variant="standard"; shift ;;
+      *) die "bootstrap: unknown option $1" ;;
+    esac
+  done
+
+  mkdir -p "$DOCKER_DIR"
+  local image_sandbox image_full df_sandbox df_full
+
+  if [[ "$variant" == alpine ]]; then
+    local feats tag
+    feats="$(normalize_features "$with_list")"
+    tag="$(tag_for_features "$feats")"
+    image_sandbox="pibox-sandbox-$tag"
+    image_full="pibox-full-$tag"
+    df_sandbox="$DOCKER_DIR/Dockerfile.sandbox.$tag"
+    df_full="$DOCKER_DIR/Dockerfile.$tag"
+
+    alpine_write_dockerfile "$feats" 0 "$df_full"
+    alpine_write_dockerfile "$feats" 1 "$df_sandbox"
+
+    info "wrote $df_full and $df_sandbox"
+    info "features: ${feats:-none} (tag: $tag)"
+    docker_ok || die "docker required to build images"
+    info "building $image_full"
+    build_image "$image_full" "$df_full"
+    info "building $image_sandbox"
+    build_image "$image_sandbox" "$df_sandbox"
+
+    cfg_set_default variant alpine
+    cfg_set_default features "$feats"
+    cfg_set_default image "$image_sandbox"
+    cfg_set_default image_full "$image_full"
+  else
+    image_sandbox="pibox-sandbox"
+    image_full="pibox-full"
+    df_sandbox="$DOCKER_DIR/Dockerfile.sandbox"
+    df_full="$DOCKER_DIR/Dockerfile"
+
+    cat >"$df_sandbox" <<'DOCKER'
+FROM node:22-bookworm-slim
+ARG PI_VERSION=0.2.15
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      bash ca-certificates curl fd-find git jq less make ripgrep unzip xz-utils \
+      python3 python3-venv build-essential \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd && rm -rf /var/lib/apt/lists/*
+RUN npm install -g --ignore-scripts @fleetagent/pi-coding-agent@${PI_VERSION} \
+    && npm cache clean --force
+RUN mkdir -p /workspace /home/node/.pi && chown -R 1000:1000 /workspace /home/node
+ENV HOME=/home/node PI_DAEMON_HOST=0.0.0.0 PI_DAEMON_PORT=8787 \
+    PI_DAEMON_CWD=/workspace PI_DAEMON_TEMP_ROOT=/tmp TMPDIR=/tmp \
+    PI_DAEMON_ALLOW_INSECURE_TRANSPORT=1 PI_DAEMON_ALLOW_PROCESS_EXEC=1
+WORKDIR /workspace
+USER 1000:1000
+EXPOSE 8787
+ENTRYPOINT ["pi"]
+CMD ["--daemon"]
+DOCKER
+    cat >"$df_full" <<'DOCKER'
+FROM node:22-bookworm-slim
+ARG PI_VERSION=1.5.2
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      bash ca-certificates curl fd-find git jq less make ripgrep unzip xz-utils \
+      python3 python3-venv build-essential \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd && rm -rf /var/lib/apt/lists/*
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_VERSION} \
+    && npm cache clean --force
+RUN mkdir -p /workspace /home/node/.pi && chown -R 1000:1000 /workspace /home/node
+ENV HOME=/home/node TERM=xterm-256color
+WORKDIR /workspace
+USER 1000:1000
+ENTRYPOINT ["pi"]
+DOCKER
+    info "wrote $df_full and $df_sandbox (standard)"
+    docker_ok || die "docker required to build images"
+    info "building $image_full"
+    build_image "$image_full" "$df_full"
+    info "building $image_sandbox"
+    build_image "$image_sandbox" "$df_sandbox"
+
+    cfg_set_default variant standard
+    cfg_set_default features ""
+    cfg_set_default image "$image_sandbox"
+    cfg_set_default image_full "$image_full"
+  fi
+
+  info "images ready: $image_sandbox, $image_full"
+  dim "sizes: $(docker image inspect "$image_sandbox" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}'), $(docker image inspect "$image_full" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}')"
+}
+
+
+resolve_key() {
+  local provider="$1" variant
+  provider_env "$provider" >/dev/null || die "unknown provider '$provider' (add it to provider_env)"
+  if ! skey_has "$provider"; then
+    warn "no credential registered for provider '$provider'"
+    printf '  register once (hidden input, OS keyring):\n    skey set %s default\n' "$provider" >&2
+    return 3
+  fi
+  variant="$(cfg_get "$provider" variant || true)"
+  if [[ -z "$variant" ]]; then
+    if skey_variants "$provider" | grep -qx default; then
+      variant=default
+    else
+      local n; n="$(skey_variants "$provider" | wc -l | tr -d ' ')"
+      if [[ "$n" == 1 ]]; then
+        variant="$(skey_variants "$provider" | head -n1)"
+      else
+        warn "$provider has variants: $(skey_variants "$provider" | tr '\n' ' ')"
+        warn "pin one with: jq '.providers[\"$provider\"].variant=\"NAME\"' $CFG"
+        variant="$(skey_variants "$provider" | head -n1)"
+        warn "using '$variant' for now"
+      fi
+    fi
+    cfg_set "$provider" variant "$variant"
+  fi
+  cfg_set "$provider" env "$(provider_env "$provider")"
+  KEY_VARIANT="$variant"
+  KEY_ENV="$(provider_env "$provider")"
+}
+
+wait_daemon() {
+  local name="$1" i
+  for i in $(seq 1 80); do
+    docker logs "$name" 2>&1 | grep -q 'daemon ready' && return 0
+    sleep 0.25
+  done
+  docker logs "$name" >&2 2>&1 | tail -n 20
+  return 1
+}
+
+free_port() {
+  python3 - <<'PY'
+import socket
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()
+PY
+}
+
+# Internal: runs under `skey run --env PIBOX_SECRET`.
+# The key goes straight into an ephemeral 0600 auth.json and is unset before pi starts.
+cmd_launch() {
+  # internal: runs under `skey run --env PIBOX_SECRET`
+  local provider="" model="" port="${PIBOX_PORT:-}" dir="" native=0
+  local -a rest=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --provider) provider="$2"; shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      --native) native=1; shift ;;
+      *) rest+=("$1"); shift ;;
+    esac
+  done
+  [[ -n "$provider" && -n "$model" ]] || die "_launch: missing arguments"
+  [[ -n "${PIBOX_SECRET:-}" ]] || die "_launch: PIBOX_SECRET not set"
+
+  dir="$(prepare_agent_dir)"
+  (umask 077; jq -n --arg p "$provider" --arg k "$PIBOX_SECRET" \
+      '{($p): {type:"api_key", key:$k}}' >"$dir/auth.json")
+  chmod 600 "$dir/auth.json"
+  unset PIBOX_SECRET
+  trap "rm -rf '$dir'" EXIT INT TERM
+
+  local -a extra=()
+  [[ "${PIBOX_NO_EXTENSIONS:-0}" == 1 ]] && extra+=(--no-extensions)
+
+  if [[ "$native" == 1 ]]; then
+    [[ -n "${PIBOX_CWD:-}" ]] && cd "$PIBOX_CWD"
+    PI_CODING_AGENT_DIR="$dir" "${PIBOX_PI:-pi}" ${extra[@]+"${extra[@]}"} \
+      --model "$model" ${rest[@]+"${rest[@]}"}
+  else
+    [[ -n "$port" ]] || die "_launch: missing port"
+    PI_CODING_AGENT_DIR="$dir" "$SANDBOX_PI" ${extra[@]+"${extra[@]}"} \
+      --remote "ws://127.0.0.1:$port/pi/workspace" --model "$model" \
+      ${rest[@]+"${rest[@]}"}
+  fi
+}
+
+cmd_run() {
+  # uv-style: `pibox run pi ...`; the agent name is optional.
+  case "${1:-}" in
+    pi) shift ;;
+    omp|claude|codex|dsh|opencode)
+      die "pibox runs pi only; use agentbox for ${1}" ;;
+  esac
+  local runtime="" model="" mode="" force=0 dry=0
+  local ws_mode="" session_mode="${PIBOX_SESSION_MODE:-ask}" NO_EXT=0 ROOT=0
+  local -a passthru=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --runtime) runtime="$2"; shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      --mode) mode="$2"; shift 2 ;;
+      --force) force=1; shift ;;
+      --session-mode) session_mode="$2"; shift 2 ;;
+      --workspace) ws_mode="$2"; shift 2 ;;
+      --no-extensions) NO_EXT=1; shift ;;
+      --root) ROOT=1; shift ;;
+      --dry-run) dry=1; shift ;;
+      *) passthru+=("$1"); shift ;;
+    esac
+  done
+
+  [[ -n "$model" ]] || die "--model provider/model is required"
+  local provider="${model%%/*}"
+  [[ "$provider" != "$model" ]] || die "use an explicit provider prefix, e.g. --model opencode-go/muse-spark-1.3-contributor"
+
+  resolve_images
+  runtime="${runtime:-$(cfg_default runtime)}"; runtime="${runtime:-docker}"
+  mode="${mode:-$(cfg_default mode)}"; mode="${mode:-auto}"
+
+  resolve_key "$provider" || exit $?
+  local variant="$KEY_VARIANT" envvar="$KEY_ENV"
+
+  if [[ "$mode" == auto ]]; then
+    if project_root >/dev/null 2>&1; then
+      mode=container
+    else
+      local help_text=""
+      help_text="$("$SANDBOX_PI" --help 2>&1 || true)"
+      if grep -q -- '--remote <url>' <<<"$help_text"; then
+        mode=remote
+      else
+        mode=container
+      fi
+    fi
+  fi
+
+  if [[ "$mode" == remote && "$ROOT" == 1 ]]; then
+    die "--root is not supported in remote mode (the daemon refuses to run as root); use --mode container"
+  fi
+
+  if [[ "$mode" == remote ]]; then
+    preflight_remote || die "remote cannot load your extensions; use --mode native, --mode container (with pibox migrate), or --no-extensions"
+    [[ -n "$PREFLIGHT_MODE" ]] && mode="$PREFLIGHT_MODE"
+    [[ "$PREFLIGHT_NO_EXT" == 1 ]] && NO_EXT=1
+  fi
+
+  info "model=$model provider=$provider variant=$variant env=$envvar runtime=$runtime mode=$mode"
+
+  case "$mode" in
+    auto|remote|container|native) : ;;
+    *) die "--mode must be auto, remote, container, or native" ;;
+  esac
+  case "$runtime" in
+    docker) : ;;
+    lima) : ;;
+    *) die "--runtime must be docker or lima" ;;
+  esac
+
+  guard_workspace "$(workspace_src)" "$force"
+
+  local penv=""
+  if [[ "$dry" != 1 ]]; then
+    penv="$(ensure_project_env)"
+  fi
+  if [[ -n "$penv" ]]; then
+    export PIBOX_BASE_DIR="$penv"
+    info "using project environment $penv"
+  fi
+
+  if [[ -z "$ws_mode" ]]; then
+    ws_mode="$(workspace_mode_from_manifest "$(project_root || echo "$PWD")")"
+  fi
+  ws_mode="${ws_mode:-mount}"
+  case "$ws_mode" in
+    mount) : ;;
+    git)
+      if [[ "$dry" == 1 ]]; then
+        info "dry run: would create a git worktree under .pibox/work/"
+      else
+        prepare_git_worktree
+        trap on_exit EXIT INT TERM
+      fi
+      ;;
+    *) die "--workspace must be mount or git" ;;
+  esac
+
+  decide_session "$session_mode" ${passthru[@]+"${passthru[@]}"}
+  case "$SESSION_CHOICE" in
+    quit) exit 0 ;;
+    continue) passthru=(-c ${passthru[@]+"${passthru[@]}"}); info "continuing the most recent session" ;;
+    new) [[ "$session_mode" == ask ]] && info "starting a new session" ;;
+  esac
+
+  if [[ "$dry" == 1 ]]; then
+    info "dry run; no container started, no secret read"
+    dim "would start: $runtime/$mode in $(workspace_src)"
+    dim "session: $SESSION_CHOICE; pi args: ${passthru[*]:-<none>}"
+    return 0
+  fi
+
+  if [[ "$mode" == native ]]; then
+    info "native mode: your own pi and full config; tools run on this host"
+    warn "no sandbox in native mode"
+    if [[ "$dry" == 1 ]]; then
+      dim "would run: ${PIBOX_PI:-pi} --model $model ${passthru[*]:-}"
+      return 0
+    fi
+    PIBOX_CWD="$(workspace_src)" skey run --no-redact "$provider" "$variant" --env PIBOX_SECRET -y -- \
+      "$0" _launch --provider "$provider" --model "$model" --native \
+      ${passthru[@]+"${passthru[@]}"}
+    exit $?
+  fi
+
+  if [[ "$runtime" == lima ]]; then
+    ensure_lima || die "VM unavailable"
+    ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile" 2>/dev/null || true
+    local -a tty=()
+    have_tty && tty=(-it)
+    local -a rootargs=()
+    [[ "$ROOT" == 1 ]] && rootargs=(--user 0:0 -e HOME=/home/node)
+    local sbase sessions_target store
+    sbase="$(session_base)"; sessions_target="/home/node/.pi/sessions"
+    store="$(pnpm_store)"
+    local -a envmount=()
+    if [[ -n "${PIBOX_BASE_DIR:-}" ]]; then
+      envmount=(-v "$PIBOX_BASE_DIR:/home/node/.pi/agent")
+      sessions_target="/home/node/.pi/agent/sessions"
+    fi
+    envmount+=(-v "$store:/home/node/.cache/pibox/pnpm-store")
+    info "running pi inside a container in VM '$LIMA_NAME'"
+    warn "note: VM mode passes the credential to the guest; prefer --runtime docker for tighter key isolation"
+    limactl shell "$LIMA_NAME" -- docker run --rm ${tty[@]+"${tty[@]}"} ${rootargs[@]+"${rootargs[@]}"} ${envmount[@]+"${envmount[@]}"} \
+      -v "$(workspace_src):/workspace" -v "$sbase:$sessions_target" -v pibox-home:/home/node/.pi \
+      "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"}
+    return $?
+  fi
+
+  if [[ "$mode" == remote ]]; then
+    docker_ok || die "docker unavailable"
+    ensure_image "$IMAGE" "$DOCKER_DIR/Dockerfile.sandbox"
+
+    local token port name dir
+    token="$(openssl rand -hex 32)"
+    port="$(free_port)"
+    name="pibox-$$-$RANDOM"
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/pibox.XXXXXX")"
+    chmod 700 "$dir"
+
+    info "starting sandbox daemon on 127.0.0.1:$port"
+    docker run -d --rm --name "$name" \
+      --label pibox=1 --label "pibox.workspace=$(workspace_src)" \
+      -e PI_DAEMON_TOKEN="$token" \
+      -v "$(workspace_src):/workspace" \
+      -p "127.0.0.1:$port:8787" \
+      "$IMAGE" >/dev/null
+
+    PIBOX_CLEAN_CONTAINER="$name"; PIBOX_CLEAN_DIR="$dir"
+    trap on_exit EXIT INT TERM
+    wait_daemon "$name" || die "sandbox daemon failed to start"
+
+    if [[ "$NO_EXT" != 1 && -f "$AGENT_DIR/settings.json" ]] && jq -e '.packages | length > 0' "$AGENT_DIR/settings.json" >/dev/null 2>&1; then
+      warn "remote mode uses the sandbox pi build; extensions that import @earendil-works/* will not load"
+      dim "for your exact extensions and dashboard: --mode native (runs on this host, no sandbox)"
+    fi
+    info "tools run in the container; key is written to an ephemeral 0600 agent dir"
+    PI_REMOTE_TOKEN="$token" PIBOX_PORT="$port" PIBOX_AGENT_DIR="$dir" \
+      PIBOX_NO_EXTENSIONS="${NO_EXT}" \
+      skey run --no-redact "$provider" "$variant" --env PIBOX_SECRET -y -- \
+      "$0" _launch --provider "$provider" --model "$model" \
+      ${passthru[@]+"${passthru[@]}"}
+    local rc=$?
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    rm -rf "$dir"
+    PIBOX_CLEAN_CONTAINER=""; PIBOX_CLEAN_DIR=""
+    finalize_git_workspace
+    trap - EXIT INT TERM
+    return $rc
+  fi
+
+  # container mode: whole pi process inside the container
+  docker_ok || die "docker unavailable"
+  ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile"
+  local sbase sessions_target store; sbase="$(session_base)"; mkdir -p "$sbase"
+  sessions_target="/home/node/.pi/sessions"
+  store="$(pnpm_store)"; mkdir -p "$store"
+  local -a envmount=()
+  if [[ -n "${PIBOX_BASE_DIR:-}" ]]; then
+    envmount=(-v "$PIBOX_BASE_DIR:/home/node/.pi/agent")
+    sessions_target="/home/node/.pi/agent/sessions"
+  fi
+  envmount+=(-v "$store:/home/node/.cache/pibox/pnpm-store" -e "PIBOX_PNPM_STORE=/home/node/.cache/pibox/pnpm-store")
+  local -a tty=()
+  have_tty && tty=(-it)
+  local -a rootargs=()
+  if [[ "$ROOT" == 1 ]]; then
+    rootargs=(--user 0:0 -e HOME=/home/node)
+    warn "running as root inside the container; tools can install packages"
+  fi
+  info "running the whole pi process in the container"
+  skey run --no-redact "$provider" "$variant" --env "$envvar" -y -- \
+    docker run --rm ${tty[@]+"${tty[@]}"} ${rootargs[@]+"${rootargs[@]}"} --label pibox=1 --init \
+      --cap-drop=ALL --security-opt=no-new-privileges \
+      -e "$envvar" \
+      -v "$(workspace_src):/workspace" \
+      ${envmount[@]+"${envmount[@]}"} \
+      -v "$sbase:$sessions_target" \
+      -v pibox-home:/home/node/.pi \
+      "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"}
+}
+
+cmd_vm() {
+  local action="${1:-status}"
+  need_cmd limactl lima || die "lima is not installed"
+  case "$action" in
+    status) printf '%s: %s\n' "$LIMA_NAME" "$(lima_state)" ;;
+    start)
+      case "$(lima_state)" in
+        absent) limactl start --name="$LIMA_NAME" --tty=false template:docker-rootful ;;
+        stopped) limactl start "$LIMA_NAME" ;;
+        running) info "already running" ;;
+      esac ;;
+    stop) limactl stop "$LIMA_NAME" ;;
+    delete) limactl delete "$LIMA_NAME" ;;
+    shell) shift; limactl shell "$LIMA_NAME" -- "$@" ;;
+    *) die "vm: use status|start|stop|delete|shell" ;;
+  esac
+}
+
+
+
+# ---------- project environment (uv-style) ----------
+project_root() {
+  local d="$PWD"
+  while :; do
+    if [[ -f "$d/pibox.toml" ]]; then printf '%s' "$d"; return 0; fi
+    [[ "$d" == "/" ]] && return 1
+    d="$(dirname "$d")"
+  done
+}
+manifest_path() { printf '%s/pibox.toml' "$1"; }
+lock_path()     { printf '%s/pibox.lock' "$1"; }
+env_path()      { printf '%s/.pibox/env' "$1"; }
+pi_version()    { pi --version 2>&1 | head -n1 | sed 's/^v//'; }
+
+toml_extensions() {
+  local file="$1"
+  python3 - "$file" <<'PYEOF'
+import re, sys, json
+try:
+    text = open(sys.argv[1]).read()
+except OSError:
+    print("{}"); sys.exit(0)
+m = re.search(r'^\[extensions\]\s*$(.*?)(?=^\[|\Z)', text, re.M | re.S)
+out = {}
+if m:
+    for line in m.group(1).splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        mm = re.match(r'^"([^"]+)"\s*=\s*"([^"]*)"$', line)
+        if mm:
+            out[mm.group(1)] = mm.group(2)
+print(json.dumps(out))
+PYEOF
+}
+
+write_manifest() {
+  local root="$1" lock="$2" ver
+  ver="$(jq -r '.pi // "unknown"' "$lock")"
+  {
+    printf '# generated by pibox; change it with: pibox add / pibox remove\n'
+    printf '[pi]\nversion = "%s"\n\n' "$ver"
+    printf '[extensions]\n'
+    jq -r '.extensions | to_entries | sort_by(.key)[] | "\"\(.key)\" = \"\(.value)\""' "$lock"
+  } >"$(manifest_path "$root")"
+}
+
+write_lock_from_toml() {
+  local root="$1" ext pi_v
+  ext="$(toml_extensions "$(manifest_path "$root")")"
+  pi_v="$(pi_version)"
+  jq -n --arg pi "$pi_v" --argjson ext "$ext" \
+    '{version:1, pi:$pi, extensions:$ext}' >"$(lock_path "$root")"
+}
+
+seed_env() {
+  local root="$1" env base f d
+  env="$(env_path "$root")"
+  base="$env/base"
+  rm -rf "$env"
+  mkdir -p "$env/npm" "$base"
+
+  if [[ -f "$AGENT_DIR/settings.json" ]]; then
+    jq 'del(.packages)' "$AGENT_DIR/settings.json" >"$env/settings.json"
+  else
+    printf '{}\n' >"$env/settings.json"
+  fi
+
+  # interface files: copied into base/, exposed with relative links so the
+  # environment still works when it is mounted into a container or VM
+  for f in AGENTS.md SYSTEM.md mcp.json models-store.json; do
+    if [[ -e "$AGENT_DIR/$f" ]]; then
+      cp -R "$AGENT_DIR/$f" "$base/$f"
+      ln -s "base/$f" "$env/$f"
+    fi
+  done
+  for d in extensions skills rules prompt-templates themes statusline; do
+    if [[ -e "$AGENT_DIR/$d" ]]; then
+      cp -R "$AGENT_DIR/$d" "$base/$d"
+      ln -s "base/$d" "$env/$d"
+    fi
+  done
+  # sessions stay global; containers mount over this path
+  [[ -e "$AGENT_DIR/sessions" ]] && ln -s "$AGENT_DIR/sessions" "$env/sessions"
+}
+
+spec_for() {
+  local source="$1" version="$2"
+  case "$version" in
+    path|"") printf '%s' "$source" ;;
+    *) printf '%s@%s' "$source" "$version" ;;
+  esac
+}
+
+pnpm_store() {
+  printf '%s' "${PIBOX_PNPM_STORE:-${XDG_CACHE_HOME:-$HOME/.cache}/pibox/pnpm-store}"
+}
+
+sync_env() {
+  local root="$1" env store source version spec deps pkgs pm
+  env="$(env_path "$root")"
+  store="$(pnpm_store)"
+  [[ -f "$(lock_path "$root")" ]] || write_lock_from_toml "$root"
+
+  info "creating environment in $env"
+  seed_env "$root"
+  mkdir -p "$store"
+
+  # npm sources are installed by the package manager as one resolution
+  deps="$(jq -c '[.extensions | to_entries[] | select(.key | startswith("npm:")) | {key:(.key | sub("^npm:"; "")), value:.value}] | from_entries' "$(lock_path "$root")")"
+  printf '{"name":"pibox-env","private":true,"dependencies":%s}\n' "$deps" >"$env/npm/package.json"
+  printf 'auto-install-peers=false\nstrict-peer-dependencies=false\nignore-scripts=true\n' >"$env/npm/.npmrc"
+
+  # reuse the committed lock for transitive reproducibility
+  [[ -f "$root/pibox.pnpm-lock.yaml" ]] && cp "$root/pibox.pnpm-lock.yaml" "$env/npm/pnpm-lock.yaml"
+
+  if command -v pnpm >/dev/null 2>&1; then
+    pm=pnpm
+    local -a flags=(--dir "$env/npm" --store-dir "$store" --reporter silent --ignore-scripts)
+    if [[ "${PIBOX_OFFLINE:-0}" == 1 ]]; then flags+=(--offline); else flags+=(--prefer-offline); fi
+    if [[ "${PIBOX_FROZEN:-0}" == 1 && -f "$env/npm/pnpm-lock.yaml" ]]; then flags+=(--frozen-lockfile); fi
+    dim "pnpm install (store: $store)"
+    pnpm install ${flags[@]+"${flags[@]}"} >/dev/null || { warn "pnpm install failed"; return 1; }
+    [[ -f "$env/npm/pnpm-lock.yaml" ]] && cp "$env/npm/pnpm-lock.yaml" "$root/pibox.pnpm-lock.yaml"
+  else
+    pm=npm
+    dim "pnpm not found; falling back to npm"
+    ( cd "$env/npm" && npm install --no-audit --no-fund --prefer-offline --ignore-scripts >/dev/null ) || {
+      warn "npm install failed"; return 1
+    }
+  fi
+
+  # non-npm sources keep using pi's own installer
+  while IFS=$'\t' read -r source version; do
+    case "$source" in npm:*) continue ;; esac
+    spec="$(spec_for "$source" "$version")"
+    dim "install $spec"
+    PI_CODING_AGENT_DIR="$env" pi install "$spec" -na >/dev/null || { warn "failed to install $spec"; return 1; }
+  done < <(jq -r '.extensions | to_entries[] | [.key, .value] | @tsv' "$(lock_path "$root")")
+
+  # settings.packages must mirror the manifest exactly
+  pkgs="$(jq -c '[.extensions | to_entries[] | .key + (if .value == "path" or .value == "" then "" else "@" + .value end)]' "$(lock_path "$root")")"
+  jq --argjson p "$pkgs" '.packages = $p' "$env/settings.json" >"$env/settings.json.tmp.$$" \
+    && mv "$env/settings.json.tmp.$$" "$env/settings.json"
+
+  info "environment ready ($(jq -r '.extensions | length' "$(lock_path "$root")") extensions via $pm)"
+}
+
+resolve_source_version() {
+  local source="$1" name
+  case "$source" in
+    npm:*)
+      name="${source#npm:}"
+      npm view "$name" version 2>/dev/null | tail -n1
+      ;;
+    git:*)
+      printf 'HEAD'
+      ;;
+    *)
+      printf 'path'
+      ;;
+  esac
+}
+
+cmd_export() {
+  local from_global=0 root env source name version pkgjson
+  [[ "${1:-}" == "--global" ]] && from_global=1
+
+  root="$(project_root || true)"
+  [[ -n "$root" ]] || root="$PWD"
+
+  if [[ "$from_global" == 1 ]]; then
+    env="$AGENT_DIR"
+    info "exporting global pi packages"
+  elif [[ -d "$(env_path "$root")" ]]; then
+    env="$(env_path "$root")"
+    info "exporting project environment"
+  else
+    env="$AGENT_DIR"
+    info "no project environment; exporting global pi packages"
+  fi
+
+  local tmp; tmp="$(mktemp)"
+  printf '{"version":1,"pi":"%s","extensions":{}}\n' "$(pi_version)" >"$tmp"
+  if [[ -f "$env/settings.json" ]]; then
+    while IFS= read -r source; do
+      [[ -n "$source" ]] || continue
+      case "$source" in
+        npm:*)
+          name="$(printf '%s' "${source#npm:}" | sed 's/@[^@/]*$//')"
+          pkgjson="$env/npm/node_modules/$name/package.json"
+          if [[ -f "$pkgjson" ]]; then
+            version="$(jq -r .version "$pkgjson")"
+          else
+            version="$(resolve_source_version "$source")"
+          fi
+          ;;
+        *)
+          version="$(printf '%s' "$source" | sed -n 's/.*@//p')"
+          [[ -n "$version" ]] || version="path"
+          source="$(printf '%s' "$source" | sed 's/@[^@/]*$//')"
+          ;;
+      esac
+      jq --arg s "$source" --arg v "$version" '.extensions[$s] = $v' "$tmp" >"$tmp.2" && mv "$tmp.2" "$tmp"
+    done < <(jq -r '.packages[]? // empty' "$env/settings.json" 2>/dev/null)
+  fi
+
+  mkdir -p "$root"
+  mv "$tmp" "$(lock_path "$root")"
+  write_manifest "$root" "$(lock_path "$root")"
+  info "wrote $(manifest_path "$root") and $(lock_path "$root")"
+  jq -r '.extensions | to_entries[] | "  \(.key) = \(.value)"' "$(lock_path "$root")"
+}
+
+cmd_sync() {
+  local root; root="$(project_root || true)"
+  [[ -n "$root" ]] || die "no pibox.toml found (run: pibox export)"
+  sync_env "$root"
+}
+
+cmd_add() {
+  local source="${1:-}" version="" root name
+  [[ -n "$source" ]] || die "usage: pibox add <npm:pkg|git:url|./path>[@version]"
+  root="$(project_root || true)"
+  [[ -n "$root" ]] || root="$PWD"
+  [[ -f "$(manifest_path "$root")" ]] || { cmd_export >/dev/null; }
+  [[ -f "$(lock_path "$root")" ]] || write_lock_from_toml "$root"
+
+  case "$source" in
+    npm:*|git:*|./*|../*|/*) : ;;
+    *) source="npm:$source" ;;
+  esac
+  case "$source" in
+    *@*) version="${source##*@}"; source="${source%@*}" ;;
+  esac
+  if [[ -z "$version" ]]; then
+    version="$(resolve_source_version "$source")"
+    [[ -n "$version" ]] || die "cannot resolve a version for '$source'"
+  fi
+
+  jq --arg s "$source" --arg v "$version" '.extensions[$s] = $v' "$(lock_path "$root")" >"$(lock_path "$root").tmp" \
+    && mv "$(lock_path "$root").tmp" "$(lock_path "$root")"
+  write_manifest "$root" "$(lock_path "$root")"
+  info "added $source@$version"
+  sync_env "$root"
+}
+
+cmd_remove() {
+  local source="${1:-}" root
+  [[ -n "$source" ]] || die "usage: pibox remove <source>"
+  root="$(project_root || true)"
+  [[ -n "$root" ]] || die "no pibox.toml found"
+  [[ -f "$(lock_path "$root")" ]] || write_lock_from_toml "$root"
+  jq --arg s "$source" 'del(.extensions[$s])' "$(lock_path "$root")" >"$(lock_path "$root").tmp" \
+    && mv "$(lock_path "$root").tmp" "$(lock_path "$root")"
+  write_manifest "$root" "$(lock_path "$root")"
+  info "removed $source"
+  sync_env "$root"
+}
+
+cmd_env() {
+  local action="${1:-status}" root
+  root="$(project_root || true)"
+  case "$action" in
+    status)
+      [[ -n "$root" ]] || die "no pibox.toml found in this directory tree"
+      printf 'root: %s\n' "$root"
+      printf 'env:  %s (%s)\n' "$(env_path "$root")" "$([[ -d "$(env_path "$root")" ]] && echo present || echo missing)"
+      printf 'lock: %s\n' "$(lock_path "$root")"
+      [[ -f "$(lock_path "$root")" ]] && jq -r '.extensions | to_entries[] | "  \(.key) = \(.value)"' "$(lock_path "$root")"
+      ;;
+    init)
+      root="${root:-$PWD}"
+      cmd_export
+      sync_env "$root"
+      ;;
+    *) die "env: use status|init" ;;
+  esac
+}
+
+ensure_project_env() {
+  local root env
+  root="$(project_root || true)"
+  [[ -n "$root" ]] || return 0
+  env="$(env_path "$root")"
+  if [[ ! -d "$env/npm/node_modules" ]]; then
+    info "project environment missing; syncing"
+    sync_env "$root"
+  fi
+  printf '%s' "$env"
+}
+
+cmd_update() {
+  local check=0 bootstrap=1 force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --check) check=1; shift ;;
+      --no-bootstrap) bootstrap=0; shift ;;
+      --force) force=1; shift ;;
+      *) die "update: unknown option $1" ;;
+    esac
+  done
+
+  need_cmd git git || die "git is required for updates"
+  local repo
+  repo="${PIBOX_REPO:-$(meta_repo || true)}"
+  if [[ -z "$repo" ]]; then
+    die "no install metadata found; re-run install.sh from your clone once, or set PIBOX_REPO=/path/to/pibox"
+  fi
+  [[ -d "$repo/.git" ]] || die "'$repo' is not a git checkout (set PIBOX_REPO)"
+  [[ -f "$repo/pibox" && -f "$repo/install.sh" ]] || die "'$repo' does not look like the pibox repository"
+
+  info "repository: $repo"
+  local before after
+  before="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+  if ! git -C "$repo" fetch --quiet 2>/dev/null; then
+    die "git fetch failed (check network/remotes)"
+  fi
+  after="$(git -C "$repo" rev-parse --short '@{u}' 2>/dev/null || echo unknown)"
+
+  if [[ "$check" == 1 ]]; then
+    if [[ "$before" == "$after" ]]; then
+      info "up to date ($before)"
+    else
+      info "update available: $before -> $after"
+      git -C "$repo" log --oneline "$before..@{u}" 2>/dev/null | head -n 10 | while IFS= read -r l; do dim "$l"; done
+      dim "apply with: pibox update"
+    fi
+    return 0
+  fi
+
+  if [[ "$force" != 1 && -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]]; then
+    die "the checkout has local changes; commit/stash them, or re-run with --force"
+  fi
+
+  info "pulling"
+  git -C "$repo" pull --ff-only >&2 || die "git pull --ff-only failed"
+  after="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  if [[ "$before" == "$after" ]]; then
+    info "already at $after"
+  else
+    info "updated $before -> $after"
+  fi
+
+  info "refreshing the installed script"
+  "$repo/install.sh" >/dev/null || die "install.sh failed"
+  write_meta "$repo"
+
+  if [[ "$bootstrap" == 1 ]]; then
+    info "rebuilding images (bootstrap)"
+    "$repo/pibox" bootstrap
+  else
+    dim "skipped bootstrap (--no-bootstrap)"
+  fi
+
+  info "done: $(~/.local/bin/pibox version 2>/dev/null || echo "$PIBOX_VERSION")"
+}
+
+cmd_help() {
+  cat <<EOF
+pibox $PIBOX_VERSION - pi with keys in the OS keyring, tools in a container or VM
+
+USAGE
+  pibox <command> [options]
+
+COMMANDS
+  init [--dry-run] [--register]
+      Read ~/.pi/agent/auth.json and register each provider's key in the
+      keyring via skey. Never prints a key.
+
+  migrate [--dry-run] [--register] [--no-sync] [--keep-auth]
+      Adopt the global pi setup into this project: every installed
+      extension with its exact version, interface files (settings,
+      mcp, AGENTS, SYSTEM, themes, statusline, skills, rules,
+      prompts), and auth.json entries. Writes pibox.toml / pibox.lock
+      and builds .pibox/env.
+
+  bootstrap [--with LIST | --minimal | --dev | --standard]
+      Build both images. Required once before the first run.
+
+      --with LIST   Alpine + single pi binary + selected toolchains.
+                    Features: python, node, go, rust, build, cli
+                    Aliases:  py, js, ts, rs, cc, tools, all
+                    Examples:
+                      --with python
+                      --with node,rust,build
+                      --with python,node,go,rust,build,cli
+      --minimal     synonym for --with none      (~155MB)
+      --dev         synonym for --with all       (~1.6GB)
+      --standard    Debian + full toolchain      (~730MB)
+
+      pi itself is always included.
+
+  update [--check] [--no-bootstrap] [--force]
+      Git pull the clone recorded at install time, refresh
+      ~/.local/bin/pibox, and rebuild the images. Alias: upgrade.
+
+  doctor
+      Dependencies, keyring contents, permissions, and plaintext-key
+      warnings. Exits non-zero when a security check fails.
+
+  run --model provider/model [options] [-- pi args]
+      Resolve the provider to its environment variable, fetch the secret
+      from the keyring, pick a runtime, and launch pi.
+
+      --runtime docker|lima      where tools execute (default: docker)
+      --mode remote|container|native
+                                 remote = orchestrate on host, tools in
+                                 container (default: auto)
+                                 native = your own pi and config, no sandbox
+      --no-extensions            do not load extensions (quiet sandboxed runs)
+      --root                     run the container as root so tools can install
+                                 packages (not available in remote mode)
+      --session-mode ask|continue|new
+                                 ask (default) prompts when the folder has
+                                 sessions; continue passes -c; new starts fresh
+      --force                    allow mounting \$HOME or / as workspace
+      --dry-run                  show the plan without starting anything
+
+  vm status|start|stop|delete|shell
+      Manage the Lima VM used by --runtime lima.
+
+  export [--global]
+      Snapshot installed pi packages with exact versions into
+      pibox.toml and pibox.lock.
+
+  sync
+      Recreate .pibox/env from pibox.toml / pibox.lock.
+
+  add <npm:pkg|git:url|./path>[@version]
+      Resolve, record, and install an extension into .pibox/env.
+
+  remove <source>
+      Remove an extension from the manifest and environment.
+
+  env status|init
+      Inspect or create the project environment.
+
+  work list|clean
+      List or remove git workspaces under .pibox/work/.
+
+  recover [--fix]
+      Diagnose leftover state after a crash: containers, temp agent dirs,
+      git workspaces, incomplete environment. --fix applies safe cleanup.
+
+  clean [--containers] [--tmp] [--work] [--env] [--all]
+      Targeted cleanup. Default removes stopped containers and stale temp
+      dirs; running containers need --force.
+
+  sessions list|resume|export
+      list:   sessions for this folder with timestamp, size, id
+      resume: pibox sessions resume <id|latest> [--model M] [-- pi args]
+      export: pibox sessions export <id|latest> [out.html]
+
+  run also accepts --workspace mount|git. git mode creates a worktree
+  from a snapshot of your dirty tree, copies untracked non-ignored
+  files, excludes .gitignored files such as .env, and commits the
+  result to pibox/<session> on exit.
+
+  version
+      Print the version.
+
+  help
+      Show this help.
+
+EXAMPLES
+  pibox bootstrap
+  pibox init
+  pibox run --model opencode-go/muse-spark-1.3-contributor
+  pibox run --model anthropic/claude-sonnet-4 -p "explain this repo"
+  pibox run --model opencode-go/muse-spark-1.3-contributor --session-mode new
+  pibox update --check
+  pibox vm status
+
+  Everything after the known flags is passed to pi.
+
+ENVIRONMENT
+  PIBOX_CONFIG_DIR       config, images, install metadata (default ~/.config/pibox)
+  PIBOX_IMAGE            sandbox image (default pibox-sandbox)
+  PIBOX_IMAGE_FULL       full image (default pibox-full)
+  PIBOX_SANDBOX_PI       host pi binary that supports --remote
+  PIBOX_PI               pi binary for --mode native (default: pi)
+  PIBOX_LIMA_NAME        Lima instance (default pibox)
+  PIBOX_SESSION_MODE     default for --session-mode
+  PIBOX_NO_EXTENSIONS=1  pass --no-extensions in remote mode
+  PIBOX_REPO             override the clone path used by update
+  PIBOX_PNPM_STORE       pnpm store (default ~/.cache/pibox/pnpm-store)
+  PIBOX_OFFLINE=1        install only from the store
+  PIBOX_FROZEN=1         require pnpm-lock.yaml to be up to date
+EOF
+}
+main() {
+  local sub="${1:-help}"; shift || true
+  case "$sub" in
+    init) cmd_init "$@" ;;
+    migrate) cmd_migrate "$@" ;;
+    doctor) cmd_doctor "$@" ;;
+    bootstrap) cmd_bootstrap "$@" ;;
+    update|upgrade) cmd_update "$@" ;;
+    export) cmd_export "$@" ;;
+    sync) cmd_sync "$@" ;;
+    add) cmd_add "$@" ;;
+    remove) cmd_remove "$@" ;;
+    env) cmd_env "$@" ;;
+    run) cmd_run "$@" ;;
+    vm) cmd_vm "$@" ;;
+    work) cmd_work "$@" ;;
+    recover) cmd_recover "$@" ;;
+    clean) cmd_clean "$@" ;;
+    sessions) cmd_sessions "$@" ;;
+    _launch) cmd_launch "$@" ;;
+    version|--version|-v) echo "$PIBOX_VERSION" ;;
+    help|-h|--help) cmd_help ;;
+    *) die "unknown command '$sub' (try: pibox help)" ;;
+  esac
+}
+
+main "$@"
