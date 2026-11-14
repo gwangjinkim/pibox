@@ -5,9 +5,11 @@
 - `install.sh` now detects the OS and package manager, lists missing
   prerequisites, and offers to install them after one confirmation.
 - Missing dependencies are attempted **one at a time, in dependency order**
-  (base tools → node → skey → pi → runtime). If an automatic install fails, the
-  exact manual steps for that dependency are printed and the installer continues
-  with the next one.
+  (base tools → node → skey → pi → runtime). Each one shows the command, asks
+  `[Y/n]`, and runs it immediately. Docker on macOS offers a runtime menu
+  (Desktop / colima / lima). If an automatic install fails, the exact manual
+  steps for that dependency are printed and the installer continues.
+- If Homebrew is missing on macOS, it offers to install it first.
 - Per-OS commands: Homebrew (macOS), apt/dnf/pacman/zypper/apk (Linux), WSL
   guidance (Windows).
 - `skey` is installed via `cargo install skey` or `go install`.

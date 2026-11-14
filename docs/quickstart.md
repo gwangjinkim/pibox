@@ -47,11 +47,10 @@ cd pisbx
 ./install.sh
 ```
 
-`install.sh` detects your OS and package manager, offers to install missing
-prerequisites with one confirmation, and then attempts them one at a time in
-dependency order. If an automatic install fails, it prints the exact manual steps
-for that dependency and continues with the next (for example, no Homebrew or no
-supported package manager).
+`install.sh` detects your OS and package manager. For each missing dependency it
+prints the command (or a menu when there is a choice, such as Docker on macOS),
+asks `[Y/n]`, and runs it immediately. If an automatic install fails it prints the
+exact manual steps for that dependency and continues with the next one.
 
 ```bash
 ./install.sh --check    # show the plan, install nothing

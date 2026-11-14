@@ -267,6 +267,53 @@ Equivalent manual install:
 install -m 0755 pisbx ~/.local/bin/pisbx
 ```
 
+### Interactive install
+
+For each missing dependency it shows the command, asks once, and runs it
+immediately. Docker on macOS offers a choice of runtime.
+
+```console
+$ ./install.sh
+
+missing prerequisites:
+
+  skey (OS keyring vault)
+  pi (agent CLI)
+
+[1/2] skey (OS keyring vault) is missing.
+  command:
+    cargo install skey
+  Run it now? [Y/n] y
+  > cargo install skey
+  installed.
+
+[2/2] pi (agent CLI) is missing.
+  command:
+    npm install -g @earendil-works/pi-coding-agent
+  Run it now? [Y/n] y
+  > npm install -g @earendil-works/pi-coding-agent
+  installed.
+```
+
+Docker on macOS:
+
+```console
+[3/3] docker or lima (sandbox runtime) is missing.
+  options:
+    1) Docker Desktop   brew install --cask docker
+    2) colima           brew install colima docker && colima start
+    3) lima (VM)        brew install lima
+    4) skip
+  choose [1-4]: 1
+  command:
+    brew install --cask docker
+  Run it now? [Y/n]
+```
+
+If a command fails, the exact manual steps for that dependency are printed and
+the installer continues with the next one. In a non-interactive shell it prints
+the steps instead of running anything.
+
 ### `./install.sh --check` (install nothing)
 
 Reports what is present and what is missing, with the exact commands for your OS.

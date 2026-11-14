@@ -297,70 +297,148 @@ fi
 printf 'missing prerequisites:\n\n'
 for dep in "${ORDER[@]}"; do
   dep_present "$dep" && continue
-  printf '  %-28s %s\n' "$(dep_title "$dep")" "$(dep_cmd "$dep" || true)"
+  printf '  %s\n' "$(dep_title "$dep")"
 done
+printf '\n'
 
-answer="n"
-if [ -t 0 ] && [ -t 1 ]; then
-  printf '\ninstall them one by one now? [y/N] '
-  read -r answer
-fi
+ask_yes() {
+  local a
+  printf '  %s [Y/n] ' "$1"
+  read -r a
+  case "$a" in n|N|no|NO) return 1 ;; *) return 0 ;; esac
+}
 
-if [[ "$answer" =~ ^[Yy]$ ]]; then
-  i=0
-  total=0
-  for dep in "${ORDER[@]}"; do dep_present "$dep" || total=$((total+1)); done
+run_cmd() {
+  printf '  > %s\n' "$1"
+  bash -c "$1"
+}
+
+choose_skey() {
+  if have cargo; then echo "cargo install skey"; return; fi
+  if have go; then echo "go install github.com/gwangjinkim/skey/skey-go@latest"; return; fi
+  printf '  options:\n' >&2
+  printf '    1) install Rust (rustup), then cargo install skey\n' >&2
+  printf '    2) install with Go (requires go)\n' >&2
+  printf '    3) skip\n' >&2
+  printf '  choose [1-3]: ' >&2
+  local c; read -r c
+  case "$c" in
+    1|"") echo 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && . "$HOME/.cargo/env" && cargo install skey' ;;
+    2) echo 'go install github.com/gwangjinkim/skey/skey-go@latest' ;;
+    *) echo "" ;;
+  esac
+}
+
+choose_docker() {
+  case "$OS" in
+    macos)
+      if have brew; then
+        printf '  options:\n' >&2
+        printf '    1) Docker Desktop   brew install --cask docker\n' >&2
+        printf '    2) colima           brew install colima docker && colima start\n' >&2
+        printf '    3) lima (VM)        brew install lima\n' >&2
+        printf '    4) skip\n' >&2
+        printf '  choose [1-4]: ' >&2
+        local c; read -r c
+        case "$c" in
+          1|"") echo "brew install --cask docker" ;;
+          2) echo "brew install colima docker && colima start" ;;
+          3) echo "brew install lima" ;;
+          *) echo "" ;;
+        esac
+      else
+        echo ""
+      fi ;;
+    *) dep_cmd docker ;;
+  esac
+}
+
+# ---------------------------------------------------------------- non-interactive
+if ! [ -t 0 ] || ! [ -t 1 ]; then
+  printf 'non-interactive shell: printing the manual steps instead.\n\n'
   for dep in "${ORDER[@]}"; do
     dep_present "$dep" && continue
-    i=$((i+1))
-    printf '\n[%d/%d] %s\n' "$i" "$total" "$(dep_title "$dep")"
-    cmd="$(dep_cmd "$dep" || true)"
-    if [ -z "$cmd" ]; then
-      printf '  no automatic installer for this platform.\n'
-      dep_hint "$dep"
-      continue
-    fi
-    printf '  > %s\n' "$cmd"
-    if bash -c "$cmd" && dep_present "$dep"; then
-      printf '  installed\n'
-    else
-      printf '  automatic install did not work.\n'
-      dep_hint "$dep"
-    fi
+    printf '%s\n' "$(dep_title "$dep")"
+    dep_hint "$dep"
+    printf '\n'
   done
-  printf '\n'
-  detect
-  if [ "${#MISSING[@]}" -gt 0 ]; then
-    printf 'still missing:\n\n'
-    for dep in "${ORDER[@]}"; do
-      dep_present "$dep" && continue
-      printf '%s\n' "$(dep_title "$dep")"
-      dep_hint "$dep"
-      printf '\n'
-    done
-    exit 1
-  fi
-  if [ "$DOCKER_DOWN" == 1 ]; then
-    printf 'warning: docker is installed but the daemon is not reachable\n'
-    case "$OS" in
-      macos) printf '  start Docker Desktop (or: colima start) before pisbx bootstrap\n\n' ;;
-      *) printf '  start it with: sudo systemctl start docker\n\n' ;;
-    esac
-  fi
-  printf 'all prerequisites are installed.\n\n'
-  if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
-    printf 'add this to your shell profile:\n  export PATH="%s:$PATH"\n\n' "$bin_dir"
-  fi
-  printf 'next: pisbx bootstrap && pisbx init && pisbx doctor\n'
-  exit 0
+  printf 'then run: pisbx doctor\n'
+  exit 1
 fi
 
-printf '\nskipped. do these in order:\n\n'
+# ---------------------------------------------------------------- Homebrew first
+if [ "$OS" = macos ] && [ "$PM" = none ]; then
+  printf 'Homebrew is not installed, which blocks automatic installs.\n'
+  if ask_yes "Install Homebrew now?"; then
+    run_cmd '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' || true
+    [ -x /opt/homebrew/bin/brew ] && export PATH="/opt/homebrew/bin:$PATH"
+    [ -x /usr/local/bin/brew ] && export PATH="/usr/local/bin:$PATH"
+    PM="$(detect_pm)"
+  fi
+  printf '\n'
+fi
+
+# ---------------------------------------------------------------- one by one
+i=0
+total=0
+for dep in "${ORDER[@]}"; do dep_present "$dep" || total=$((total+1)); done
+
 for dep in "${ORDER[@]}"; do
   dep_present "$dep" && continue
-  printf '%s\n' "$(dep_title "$dep")"
-  dep_hint "$dep"
+  i=$((i+1))
+  printf '[%d/%d] %s is missing.\n' "$i" "$total" "$(dep_title "$dep")"
+
+  case "$dep" in
+    skey)   cmd="$(choose_skey)" ;;
+    docker) cmd="$(choose_docker)" ;;
+    *)      cmd="$(dep_cmd "$dep" || true)" ;;
+  esac
+
+  if [ -z "$cmd" ]; then
+    printf '  no automatic option on this platform.\n'
+    dep_hint "$dep"
+    printf '\n'
+    continue
+  fi
+
+  printf '  command:\n    %s\n' "$cmd"
+  if ask_yes "Run it now?"; then
+    if run_cmd "$cmd" && dep_present "$dep"; then
+      printf '  installed.\n'
+    else
+      printf '  that did not work.\n'
+      dep_hint "$dep"
+    fi
+  else
+    printf '  skipped. run later:\n    %s\n' "$cmd"
+  fi
   printf '\n'
 done
-printf 'then run: pisbx doctor\n'
-exit 1
+
+detect
+if [ "${#MISSING[@]}" -gt 0 ]; then
+  printf 'still missing:\n\n'
+  for dep in "${ORDER[@]}"; do
+    dep_present "$dep" && continue
+    printf '%s\n' "$(dep_title "$dep")"
+    dep_hint "$dep"
+    printf '\n'
+  done
+  printf 'then run: pisbx doctor\n'
+  exit 1
+fi
+
+if [ "$DOCKER_DOWN" == 1 ]; then
+  printf 'warning: docker is installed but the daemon is not reachable\n'
+  case "$OS" in
+    macos) printf '  start Docker Desktop (or: colima start) before pisbx bootstrap\n\n' ;;
+    *) printf '  start it with: sudo systemctl start docker\n\n' ;;
+  esac
+fi
+
+printf 'all prerequisites are installed.\n\n'
+if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
+  printf 'add this to your shell profile:\n  export PATH="%s:$PATH"\n\n' "$bin_dir"
+fi
+printf 'next: pisbx bootstrap && pisbx init && pisbx doctor\n'
+exit 0
