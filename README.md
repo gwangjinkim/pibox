@@ -43,7 +43,7 @@ it is readable by anything in the same session.
 So this is the normal, documented setup for most AI coding tools:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-REDACTED  # now readable by every child process
+export ANTHROPIC_API_KEY=sk-ant-<your-key>  # now readable by every child process
 pi
 ```
 
