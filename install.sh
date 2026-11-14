@@ -7,29 +7,50 @@ bin_dir="${PISBX_BIN_DIR:-$HOME/.local/bin}"
 target="$bin_dir/pisbx"
 cfg_dir="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 
+usage() {
+  cat <<EOF
+usage: ./install.sh [--check] [--help]
+
+  (no option)  install pisbx and check/install prerequisites
+  --check      report missing prerequisites and exact commands, install nothing
+  --help       show this message
+
+exit codes:
+  0  everything present (or installed)
+  1  prerequisites missing or an install failed
+  2  invalid option
+EOF
+}
+
 check_only=0
-[ "${1:-}" = "--check" ] && check_only=1
+case "${1:-}" in
+  --check) check_only=1 ;;
+  --help|-h) usage; exit 0 ;;
+  "") ;;
+  *) usage >&2; exit 2 ;;
+esac
 
-mkdir -p "$bin_dir"
-install -m 0755 "$here/pisbx" "$target"
+if [ "$check_only" == 0 ]; then
+  mkdir -p "$bin_dir"
+  install -m 0755 "$here/pisbx" "$target"
 
-mkdir -p "$cfg_dir"
-if [ -f "$cfg_dir/install.json" ] && command -v jq >/dev/null 2>&1; then
-  prev="$(jq -r '.repo // empty' "$cfg_dir/install.json" 2>/dev/null || true)"
-  if [ -n "$prev" ] && [ "$prev" != "$here" ]; then
-    printf 'note:      update will now track %s\n' "$here"
-    printf '           (previously %s)\n' "$prev"
+  mkdir -p "$cfg_dir"
+  if [ -f "$cfg_dir/install.json" ] && command -v jq >/dev/null 2>&1; then
+    prev="$(jq -r '.repo // empty' "$cfg_dir/install.json" 2>/dev/null || true)"
+    if [ -n "$prev" ] && [ "$prev" != "$here" ]; then
+      printf 'note:      update will now track %s\n' "$here"
+      printf '           (previously %s)\n' "$prev"
+    fi
   fi
+  if command -v jq >/dev/null 2>&1; then
+    jq -n --arg repo "$here" --arg version "$("$here/pisbx" version)" \
+       --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+       '{repo:$repo, version:$version, installed_at:$at}' >"$cfg_dir/install.json"
+    chmod 600 "$cfg_dir/install.json"
+    printf 'repo:      %s\n' "$here"
+  fi
+  printf 'installed: %s\n\n' "$target"
 fi
-if command -v jq >/dev/null 2>&1; then
-  jq -n --arg repo "$here" --arg version "$("$here/pisbx" version)" \
-     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-     '{repo:$repo, version:$version, installed_at:$at}' >"$cfg_dir/install.json"
-  chmod 600 "$cfg_dir/install.json"
-  printf 'repo:      %s\n' "$here"
-fi
-
-printf 'installed: %s\n\n' "$target"
 
 # ---------------------------------------------------------------- platform
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -233,6 +254,21 @@ done
 have pnpm && status ok "pnpm (fast sync)" || status opt "pnpm (faster sync)"
 printf '\n'
 
+if [ "$check_only" == 1 ]; then
+  if [ "${#MISSING[@]}" -eq 0 ]; then
+    printf 'all prerequisites present\n'
+    exit 0
+  fi
+  printf 'missing prerequisites:\n\n'
+  for dep in "${ORDER[@]}"; do
+    dep_present "$dep" && continue
+    printf '%s\n' "$(dep_title "$dep")"
+    dep_hint "$dep"
+    printf '\n'
+  done
+  exit 1
+fi
+
 if [ "${#MISSING[@]}" -eq 0 ]; then
   if [ "$DOCKER_DOWN" == 1 ]; then
     printf 'warning: docker is installed but the daemon is not reachable\n'
@@ -255,17 +291,6 @@ if [ "${#MISSING[@]}" -eq 0 ]; then
   printf '  pisbx update             # pull, reinstall, rebuild images\n\n'
   printf 'docs: https://github.com/gwangjinkim/pisbx/tree/main/docs\n'
   exit 0
-fi
-
-if [ "$check_only" == 1 ]; then
-  printf 'missing prerequisites:\n\n'
-  for dep in "${ORDER[@]}"; do
-    dep_present "$dep" && continue
-    printf '%s\n' "$(dep_title "$dep")"
-    dep_hint "$dep"
-    printf '\n'
-  done
-  exit 1
 fi
 
 # ---------------------------------------------------------------- one by one

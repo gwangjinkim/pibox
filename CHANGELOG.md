@@ -14,7 +14,9 @@
 - `node` and `pi` are checked; the sandbox `pi` build is reported separately.
 - If automation fails or is unavailable, a numbered step-by-step guide is printed
   (base tools, skey, pi, container runtime, verification).
-- `./install.sh --check` reports the plan without installing anything.
+- `./install.sh --check` reports the plan and per-dependency instructions without
+  installing anything (exit 0 if complete, 1 if not). `--help` prints usage.
+- `--check` does not touch `~/.local/bin` or the install metadata.
 - Docker daemon reachability is checked and warned about.
 
 ## 0.5.2

@@ -256,12 +256,68 @@ cd pisbx
 ./install.sh
 ```
 
-`install.sh` copies the script to `~/.local/bin/pisbx` (or `$PISBX_BIN_DIR`) and
-checks dependencies. Equivalent manual install:
+`install.sh` detects your OS and package manager, lists missing prerequisites, and
+offers to install them one at a time after one confirmation. It attempts them in
+dependency order (base tools → node → skey → pi → container runtime) and prints
+exact manual steps for any dependency whose automatic install fails.
+
+Equivalent manual install:
 
 ```bash
 install -m 0755 pisbx ~/.local/bin/pisbx
 ```
+
+### `./install.sh --check` (install nothing)
+
+Reports what is present and what is missing, with the exact commands for your OS.
+It changes nothing and is CI-friendly.
+
+```console
+$ ./install.sh --check
+prerequisites (macos):
+
+  ok    jq
+  ok    python3
+  ok    openssl
+  ok    git
+  MISS  node
+  MISS  skey
+  MISS  pi
+  MISS  docker
+
+missing prerequisites:
+
+node + npm (pi runtime)
+  install with:
+    brew install node
+    verify: node --version && npm --version
+
+skey (OS keyring vault)
+    install Rust:  curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    then:          cargo install skey
+    verify: skey --help
+
+pi (agent CLI)
+    install node/npm first (see above), then:
+    npm install -g @earendil-works/pi-coding-agent
+    verify: pi --version
+
+docker or lima (sandbox runtime)
+    option A: Docker Desktop  https://docs.docker.com/desktop/install/mac-install/
+    option B: brew install colima docker && colima start
+    option C: brew install lima   (VM runtime)
+    verify: docker info
+```
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| `0` | everything present (or successfully installed) |
+| `1` | prerequisites missing or an install failed |
+| `2` | invalid option |
+
+`./install.sh --help` prints the usage summary.
 
 Then:
 
