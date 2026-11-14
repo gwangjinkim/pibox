@@ -1,0 +1,681 @@
+#!/usr/bin/env bash
+#
+# pisbx - run pi with credentials in the OS keyring and tools in a container or VM.
+#
+# Design rules (do not break these):
+#   1. Secrets are never passed in argv.
+#   2. Secrets are never written into the repository or the Docker image.
+#   3. The config file contains provider metadata, never key material.
+#   4. Every command that can touch a secret must work with --dry-run.
+#
+# Requires: bash, jq, skey (https://github.com/gwangjinkim/skey), docker and/or limactl.
+# Tested on macOS 15 (bash 3.2), Linux, and Docker Desktop on WSL2.
+#
+set -euo pipefail
+
+PISBX_VERSION="0.1.0"
+CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
+CFG="$CFG_DIR/config.json"
+DOCKER_DIR="$CFG_DIR/docker"
+IMAGE="${PISBX_IMAGE:-pisbx-sandbox}"
+IMAGE_FULL="${PISBX_IMAGE_FULL:-pisbx-full}"
+SANDBOX_PI="${PISBX_SANDBOX_PI:-$HOME/.pi/agent/npm/node_modules/.bin/pi}"
+LIMA_NAME="${PISBX_LIMA_NAME:-pisbx}"
+AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+
+# ---------- logging ----------
+if [[ -t 2 ]]; then
+  C_DIM=$'\033[2m'; C_CYAN=$'\033[36m'; C_YEL=$'\033[33m'; C_RED=$'\033[31m'; C_OFF=$'\033[0m'
+else
+  C_DIM=""; C_CYAN=""; C_YEL=""; C_RED=""; C_OFF=""
+fi
+info() { printf '%s>%s %s\n' "$C_CYAN" "$C_OFF" "$*" >&2; }
+warn() { printf '%s!%s %s\n' "$C_YEL" "$C_OFF" "$*" >&2; }
+die()  { printf '%sx%s %s\n' "$C_RED" "$C_OFF" "$*" >&2; exit 1; }
+dim()  { printf '%s  %s%s\n' "$C_DIM" "$*" "$C_OFF" >&2; }
+
+# ---------- provider -> environment variable ----------
+# Source: pi docs/providers.md (authoritative table, kept in sync by hand).
+provider_env() {
+  case "$1" in
+    anthropic)               echo ANTHROPIC_API_KEY ;;
+    openai)                  echo OPENAI_API_KEY ;;
+    google|gemini)           echo GEMINI_API_KEY ;;
+    deepseek)                echo DEEPSEEK_API_KEY ;;
+    openrouter)              echo OPENROUTER_API_KEY ;;
+    mistral)                 echo MISTRAL_API_KEY ;;
+    groq)                    echo GROQ_API_KEY ;;
+    cerebras)                echo CEREBRAS_API_KEY ;;
+    xai)                     echo XAI_API_KEY ;;
+    fireworks)               echo FIREWORKS_API_KEY ;;
+    together)                echo TOGETHER_API_KEY ;;
+    baseten)                 echo BASETEN_API_KEY ;;
+    opencode|opencode-go)    echo OPENCODE_API_KEY ;;
+    kimi)                    echo KIMI_API_KEY ;;
+    meta)                    echo META_API_KEY ;;
+    minimax)                 echo MINIMAX_API_KEY ;;
+    minimax-cn)              echo MINIMAX_CN_API_KEY ;;
+    moonshot)                echo MOONSHOT_API_KEY ;;
+    qwen)                    echo QWEN_TOKEN_PLAN_API_KEY ;;
+    qwen-cn)                 echo QWEN_TOKEN_PLAN_CN_API_KEY ;;
+    xiaomi)                  echo XIAOMI_API_KEY ;;
+    zai)                     echo ZAI_API_KEY ;;
+    nvidia)                  echo NVIDIA_API_KEY ;;
+    ai-gateway)              echo AI_GATEWAY_API_KEY ;;
+    huggingface)             echo HF_TOKEN ;;
+    copilot)                 echo COPILOT_GITHUB_TOKEN ;;
+    ant-ling)                echo ANT_LING_API_KEY ;;
+    radius)                  echo RADIUS_API_KEY ;;
+    typesafe)                echo TYPESAFE_API_KEY ;;
+    *)                       return 1 ;;
+  esac
+}
+
+# ---------- config ----------
+ensure_cfg() {
+  mkdir -p "$CFG_DIR"
+  if [[ ! -f "$CFG" ]]; then
+    printf '{"providers":{},"defaults":{"runtime":"docker","mode":"auto"}}\n' >"$CFG"
+    chmod 600 "$CFG"
+  fi
+}
+cfg_get() {
+  [[ -f "$CFG" ]] || return 1
+  jq -er --arg p "$1" --arg k "$2" '.providers[$p][$k] // empty' "$CFG" 2>/dev/null
+}
+cfg_set() {
+  ensure_cfg
+  local tmp="$CFG.tmp.$$"
+  jq --arg p "$1" --arg k "$2" --arg v "$3" \
+    '.providers[$p] = ((.providers[$p] // {}) | .[$k] = $v)' "$CFG" >"$tmp"
+  chmod 600 "$tmp"; mv "$tmp" "$CFG"
+}
+cfg_default() {
+  ensure_cfg
+  jq -er --arg k "$1" '.defaults[$k] // empty' "$CFG" 2>/dev/null || true
+}
+
+# ---------- skey helpers (avoid SIGPIPE under pipefail) ----------
+skey_has() {
+  local out; out="$(skey list 2>/dev/null || true)"
+  grep -q "^$1:" <<<"$out"
+}
+skey_variants() {
+  local out; out="$(skey list "$1" 2>/dev/null || true)"
+  sed -n 's/^ *[0-9]*) //p' <<<"$out" | sed 's|.*/||'
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 && return 0
+  warn "missing dependency: $1"
+  case "$(uname -s)" in
+    Darwin)
+      printf '  macOS:   brew install %s\n' "$2" >&2 ;;
+    Linux)
+      printf '  Debian:  sudo apt-get install -y %s\n  Fedora:  sudo dnf install -y %s\n  Arch:    sudo pacman -S %s\n' "$2" "$2" "$2" >&2 ;;
+    MINGW*|MSYS*|CYGWIN*)
+      printf '  Windows: run inside WSL2, then: sudo apt-get install -y %s\n  Docker Desktop: https://docs.docker.com/desktop/install/windows-install/\n' "$2" >&2 ;;
+  esac
+  return 1
+}
+
+# ---------- runtime detection ----------
+have_tty() { [[ -t 0 && -t 1 ]]; }
+ask_yes() {
+  have_tty || return 1
+  local reply
+  printf '  %s [y/N] ' "$1" >&2
+  read -r reply
+  [[ "$reply" =~ ^[Yy]$ ]]
+}
+
+docker_ok() {
+  need_cmd docker docker || return 1
+  if ! docker info >/dev/null 2>&1; then
+    warn "cannot reach the Docker engine"
+    case "$(uname -s)" in
+      Darwin) printf '  start Docker Desktop or OrbStack, then retry\n' >&2 ;;
+      Linux)  printf '  sudo systemctl start docker   (and add your user to the docker group)\n' >&2 ;;
+      *)      printf '  start Docker Desktop (WSL2 backend recommended)\n' >&2 ;;
+    esac
+    return 1
+  fi
+}
+
+platform_tag() {
+  case "$(uname -m)" in
+    x86_64) echo linux/amd64 ;;
+    arm64|aarch64) echo linux/arm64 ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+}
+
+ensure_image() {
+  local img="$1" dockerfile="$2"
+  docker image inspect "$img" >/dev/null 2>&1 && return 0
+  [[ -f "$dockerfile" ]] || die "image '$img' is missing and no Dockerfile found at $dockerfile (run: pisbx bootstrap)"
+  info "building $img (one time)"
+  docker build --platform "$(platform_tag)" -f "$dockerfile" -t "$img" "$(dirname "$dockerfile")" >&2
+}
+
+lima_state() {
+  local out; out="$(limactl list --format '{{.Name}} {{.Status}}' 2>/dev/null || true)"
+  if ! grep -q "^$LIMA_NAME " <<<"$out"; then echo absent
+  elif grep -q "^$LIMA_NAME Running" <<<"$out"; then echo running
+  else echo stopped; fi
+}
+
+ensure_lima() {
+  need_cmd limactl lima || return 1
+  case "$(lima_state)" in
+    absent)
+      warn "Lima VM '$LIMA_NAME' does not exist yet"
+      cat >&2 <<EOF
+  Create it (one time, downloads an image; ~5-10 min):
+    limactl start --name=$LIMA_NAME --tty=false template:docker-rootful
+  Then build the image inside the VM:
+    limactl shell $LIMA_NAME -- docker build -t $IMAGE_FULL $DOCKER_DIR
+EOF
+      return 4 ;;
+    stopped)
+      warn "Lima VM '$LIMA_NAME' is stopped"
+      if ask_yes "start it now?"; then
+        limactl start "$LIMA_NAME" >&2
+      else
+        return 4
+      fi ;;
+  esac
+  limactl shell "$LIMA_NAME" -- docker info >/dev/null 2>&1 || {
+    warn "docker is not reachable inside VM '$LIMA_NAME'"
+    return 4
+  }
+}
+
+# ---------- workspace guard ----------
+guard_workspace() {
+  local target="$1" force="${2:-0}"
+  [[ "$force" == 1 ]] && return 0
+  if [[ "$target" == "$HOME" || "$target" == "/" ]]; then
+    die "refusing to mount $target as the agent workspace (use --force to override)"
+  fi
+}
+
+# ---------- commands ----------
+cmd_init() {
+  local dry=0 reg=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --register) reg=1; shift ;;
+      *) die "init: unknown option $1" ;;
+    esac
+  done
+
+  local auth="$AGENT_DIR/auth.json"
+  [[ -f "$auth" ]] || die "no auth.json at $auth (nothing to import)"
+
+  info "inspecting $auth"
+  local providers
+  providers="$(jq -r 'to_entries[] | "\(.key)\t\(.value.type // "api_key")"' "$auth" 2>/dev/null || true)"
+  [[ -n "$providers" ]] || die "auth.json has no provider entries"
+
+  local registered=0 skipped=0 needed=0
+  while IFS=$'\t' read -r provider kind; do
+    [[ -n "$provider" ]] || continue
+    if [[ "$kind" != "api_key" ]]; then
+      dim "$provider: $kind (OAuth) - leave this to 'pi /login', not the keyring"
+      skipped=$((skipped + 1)); continue
+    fi
+    if ! provider_env "$provider" >/dev/null; then
+      warn "$provider: no known environment variable, add it to provider_env()"; continue
+    fi
+    if skey_has "$provider"; then
+      dim "$provider: already in the keyring"
+      cfg_set "$provider" env "$(provider_env "$provider")"
+      registered=$((registered + 1)); continue
+    fi
+    needed=$((needed + 1))
+    if [[ "$dry" == 1 ]]; then
+      dim "would run: skey set $provider default"
+      continue
+    fi
+    if [[ "$reg" != 1 ]]; then
+      warn "$provider: not registered"
+      dim "run: skey set $provider default    (or re-run with --register)"
+      continue
+    fi
+    info "registering $provider (input hidden)"
+    skey set "$provider" default
+    local v; v="$(skey_variants "$provider" | head -n1)"
+    cfg_set "$provider" variant "$v"
+    cfg_set "$provider" env "$(provider_env "$provider")"
+    registered=$((registered + 1))
+  done <<<"$providers"
+
+  if [[ "$dry" == 1 ]]; then
+    info "dry run: $registered already registered, $needed to register, $skipped OAuth"
+  else
+    info "done: $registered in keyring, $needed pending, $skipped OAuth"
+    dim "next: pisbx migrate --dry-run"
+  fi
+}
+
+cmd_migrate() {
+  local dry=0
+  [[ "${1:-}" == "--dry-run" ]] && { dry=1; shift; }
+
+  local auth="$AGENT_DIR/auth.json"
+  [[ -f "$auth" ]] || die "no auth.json at $auth"
+  chmod 600 "$auth" 2>/dev/null || true
+
+  # $VAR   -> safe environment reference, keep it
+  # !cmd   -> shell-out; skey refuses non-interactive get, so this is dead weight
+  # literal-> plaintext secret, must go
+  local plan
+  plan="$(jq -r 'to_entries[] |
+      ( .value.key // "" ) as $k |
+      ( if   ($k | startswith("$")) then "keep-env"
+        elif ($k | startswith("!")) then "remove-cmd"
+        elif ($k == "")             then "remove-empty"
+        else                             "remove-literal" end ) as $kind |
+      select(.value.type == "api_key") |
+      "\($kind)\t\(.key)"' "$auth" 2>/dev/null || true)"
+
+  if [[ -z "$plan" ]]; then
+    info "no api_key entries in auth.json (nothing to migrate)"
+    return 0
+  fi
+
+  printf '%s\n' "$plan" | while IFS=$'\t' read -r kind name; do
+    case "$kind" in
+      keep-env)        dim "$name: env reference, kept" ;;
+      remove-cmd)      warn "$name: shell-out reference, removed (skey get is interactive-only)" ;;
+      remove-literal)  warn "$name: plaintext key, removed" ;;
+      remove-empty)    dim "$name: empty entry, removed" ;;
+    esac
+  done
+
+  if [[ "$dry" == 1 ]]; then
+    info "dry run: would write $auth.backup.<timestamp> and drop removed entries"
+    return 0
+  fi
+
+  local backup="$auth.backup.$(date +%Y%m%d%H%M%S)"
+  cp -p "$auth" "$backup"; chmod 600 "$backup"
+  info "backup written: $backup"
+
+  local tmp="$auth.tmp.$$"
+  jq 'with_entries(
+        select(
+          .value.type != "api_key"
+          or ((.value.key // "") | startswith("$"))
+        )
+      )' "$auth" >"$tmp"
+  chmod 600 "$tmp"; mv "$tmp" "$auth"
+
+  info "auth.json now contains only OAuth entries and env references"
+  dim "keys are injected per run by: pisbx run --model provider/model"
+  dim "rollback: cp $backup $auth"
+}
+
+scan_plaintext() {
+  local auth="$AGENT_DIR/auth.json"
+  [[ -f "$auth" ]] || return 0
+  local hits=0
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    printf '  plaintext-looking key in auth.json: %s\n' "$line" >&2
+    hits=$((hits + 1))
+  done < <(jq -r 'to_entries[] | select(.value.key != null) | select(.value.key | test("^(sk-|sk_|ghp_|gho_|ghs_|github_pat_|oc_sk_|xox|glpat-|[A-Za-z0-9_-]{40,})")) | .key' "$auth" 2>/dev/null || true)
+  [[ "$hits" -gt 0 ]] && return 1
+  return 0
+}
+
+cmd_doctor() {
+  printf 'pisbx %s\n' "$PISBX_VERSION"
+  printf 'config      %s\n' "$CFG"
+  printf 'agent dir   %s\n' "$AGENT_DIR"
+  printf 'pi (host)   %s\n' "$(command -v pi || echo missing) $(pi --version 2>&1 | head -1 || true)"
+  printf 'pi (sandbox)%s %s\n' " $SANDBOX_PI" "$("$SANDBOX_PI" --version 2>&1 | head -1 || true)"
+  printf 'docker      %s\n' "$(docker --version 2>/dev/null || echo missing)"
+  printf 'lima        %s\n' "$(limactl --version 2>/dev/null | head -1 || echo missing)"
+  printf 'lima vm     %s\n' "$(lima_state 2>/dev/null || echo unknown)"
+  printf 'mode        %s / %s\n' "$(cfg_default runtime || true)" "$(cfg_default mode || true)"
+
+  printf '\nkeyring (skey):\n'
+  if command -v skey >/dev/null 2>&1; then
+    skey list 2>/dev/null | sed 's/^/  /' || true
+  else
+    printf '  missing\n'
+  fi
+
+  printf '\nsecurity checks:\n'
+  local bad=0
+  if [[ -f "$AGENT_DIR/auth.json" ]]; then
+    local perm; perm="$(stat -f '%Lp' "$AGENT_DIR/auth.json" 2>/dev/null || stat -c '%a' "$AGENT_DIR/auth.json" 2>/dev/null || echo '?')"
+    printf '  auth.json permissions: %s\n' "$perm"
+    [[ "$perm" != "600" ]] && { warn "auth.json should be 600"; bad=1; }
+    if ! scan_plaintext >/dev/null 2>&1; then
+      warn "auth.json contains plaintext credentials (run: pisbx migrate)"
+      bad=1
+    fi
+    local cmdrefs
+    cmdrefs="$(jq -r 'to_entries[] | select((.value.key // "") | startswith("!")) | .key' "$AGENT_DIR/auth.json" 2>/dev/null || true)"
+    if [[ -n "$cmdrefs" ]]; then
+      warn "auth.json has command references that cannot succeed (run: pisbx migrate)"
+      printf '%s\n' "$cmdrefs" | sed 's/^/  /' >&2
+      bad=1
+    fi
+  fi
+  if [[ "$(stat -f '%Lp' "$CFG" 2>/dev/null || stat -c '%a' "$CFG" 2>/dev/null || echo 600)" != "600" ]]; then
+    warn "config should be 600"; bad=1
+  fi
+  [[ "$bad" == 0 ]] && printf '  ok\n'
+}
+
+cmd_bootstrap() {
+  mkdir -p "$DOCKER_DIR"
+  cat >"$DOCKER_DIR/Dockerfile.sandbox" <<'DOCKER'
+FROM node:22-bookworm-slim
+ARG PI_VERSION=0.2.15
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      bash ca-certificates curl fd-find git jq less make ripgrep unzip xz-utils \
+      python3 python3-venv build-essential \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd && rm -rf /var/lib/apt/lists/*
+RUN npm install -g --ignore-scripts @fleetagent/pi-coding-agent@${PI_VERSION} \
+    && npm cache clean --force
+RUN mkdir -p /workspace /home/node/.pi && chown -R 1000:1000 /workspace /home/node
+ENV HOME=/home/node PI_DAEMON_HOST=0.0.0.0 PI_DAEMON_PORT=8787 \
+    PI_DAEMON_CWD=/workspace PI_DAEMON_TEMP_ROOT=/tmp TMPDIR=/tmp \
+    PI_DAEMON_ALLOW_INSECURE_TRANSPORT=1 PI_DAEMON_ALLOW_PROCESS_EXEC=1
+WORKDIR /workspace
+USER 1000:1000
+EXPOSE 8787
+ENTRYPOINT ["pi"]
+CMD ["--daemon"]
+DOCKER
+  cat >"$DOCKER_DIR/Dockerfile" <<'DOCKER'
+FROM node:22-bookworm-slim
+ARG PI_VERSION=1.5.2
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      bash ca-certificates curl fd-find git jq less make ripgrep unzip xz-utils \
+      python3 python3-venv build-essential \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd && rm -rf /var/lib/apt/lists/*
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_VERSION} \
+    && npm cache clean --force
+RUN mkdir -p /workspace /home/node/.pi && chown -R 1000:1000 /workspace /home/node
+ENV HOME=/home/node TERM=xterm-256color
+WORKDIR /workspace
+USER 1000:1000
+ENTRYPOINT ["pi"]
+DOCKER
+  info "wrote $DOCKER_DIR/Dockerfile and Dockerfile.sandbox"
+
+  docker_ok || die "docker required to build images"
+  ensure_image "$IMAGE" "$DOCKER_DIR/Dockerfile.sandbox"
+  ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile"
+  info "images ready: $IMAGE, $IMAGE_FULL"
+}
+
+resolve_key() {
+  local provider="$1" variant
+  provider_env "$provider" >/dev/null || die "unknown provider '$provider' (add it to provider_env)"
+  if ! skey_has "$provider"; then
+    warn "no credential registered for provider '$provider'"
+    printf '  register once (hidden input, OS keyring):\n    skey set %s default\n' "$provider" >&2
+    return 3
+  fi
+  variant="$(cfg_get "$provider" variant || true)"
+  if [[ -z "$variant" ]]; then
+    if skey_variants "$provider" | grep -qx default; then
+      variant=default
+    else
+      local n; n="$(skey_variants "$provider" | wc -l | tr -d ' ')"
+      if [[ "$n" == 1 ]]; then
+        variant="$(skey_variants "$provider" | head -n1)"
+      else
+        warn "$provider has variants: $(skey_variants "$provider" | tr '\n' ' ')"
+        warn "pin one with: jq '.providers[\"$provider\"].variant=\"NAME\"' $CFG"
+        variant="$(skey_variants "$provider" | head -n1)"
+        warn "using '$variant' for now"
+      fi
+    fi
+    cfg_set "$provider" variant "$variant"
+  fi
+  cfg_set "$provider" env "$(provider_env "$provider")"
+  KEY_VARIANT="$variant"
+  KEY_ENV="$(provider_env "$provider")"
+}
+
+wait_daemon() {
+  local name="$1" i
+  for i in $(seq 1 80); do
+    docker logs "$name" 2>&1 | grep -q 'daemon ready' && return 0
+    sleep 0.25
+  done
+  docker logs "$name" >&2 2>&1 | tail -n 20
+  return 1
+}
+
+free_port() {
+  python3 - <<'PY'
+import socket
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()
+PY
+}
+
+# Internal: runs under `skey run --env PISBX_SECRET`.
+# The key goes straight into an ephemeral 0600 auth.json and is unset before pi starts.
+cmd_launch() {
+  local provider="" model="" port="${PISBX_PORT:-}" dir="${PISBX_AGENT_DIR:-}"
+  local -a rest=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --provider) provider="$2"; shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      *) rest+=("$1"); shift ;;
+    esac
+  done
+  [[ -n "$provider" && -n "$model" && -n "$port" && -n "$dir" ]] || die "_launch: missing arguments"
+  [[ -n "${PISBX_SECRET:-}" ]] || die "_launch: PISBX_SECRET not set"
+
+  mkdir -p "$dir"; chmod 700 "$dir"
+  (umask 077; jq -n --arg p "$provider" --arg k "$PISBX_SECRET" \
+      '{($p): {type:"api_key", key:$k}}' >"$dir/auth.json")
+  chmod 600 "$dir/auth.json"
+  unset PISBX_SECRET
+  [[ -f "$AGENT_DIR/AGENTS.md" ]] && cp -f "$AGENT_DIR/AGENTS.md" "$dir/" 2>/dev/null || true
+  [[ -f "$AGENT_DIR/SYSTEM.md" ]] && cp -f "$AGENT_DIR/SYSTEM.md" "$dir/" 2>/dev/null || true
+
+  trap "rm -rf '$dir'" EXIT INT TERM
+  local -a extra=()
+  [[ "${PISBX_NO_EXTENSIONS:-0}" == 1 ]] && extra+=(--no-extensions)
+  PI_CODING_AGENT_DIR="$dir" "$SANDBOX_PI" ${extra[@]+"${extra[@]}"} \
+    --remote "ws://127.0.0.1:$port/pi/workspace" --model "$model" \
+    ${rest[@]+"${rest[@]}"}
+}
+
+cmd_run() {
+  local runtime="" model="" mode="" force=0 dry=0
+  local -a passthru=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --runtime) runtime="$2"; shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      --mode) mode="$2"; shift 2 ;;
+      --force) force=1; shift ;;
+      --dry-run) dry=1; shift ;;
+      *) passthru+=("$1"); shift ;;
+    esac
+  done
+
+  [[ -n "$model" ]] || die "--model provider/model is required"
+  local provider="${model%%/*}"
+  [[ "$provider" != "$model" ]] || die "use an explicit provider prefix, e.g. --model opencode-go/muse-spark-1.3-contributor"
+
+  runtime="${runtime:-$(cfg_default runtime)}"; runtime="${runtime:-docker}"
+  mode="${mode:-$(cfg_default mode)}"; mode="${mode:-auto}"
+
+  resolve_key "$provider" || exit $?
+  local variant="$KEY_VARIANT" envvar="$KEY_ENV"
+
+  if [[ "$mode" == auto ]]; then
+    local help_text=""
+    help_text="$("$SANDBOX_PI" --help 2>&1 || true)"
+    if grep -q -- '--remote <url>' <<<"$help_text"; then
+      mode=remote
+    else
+      mode=container
+    fi
+  fi
+
+  info "model=$model provider=$provider variant=$variant env=$envvar runtime=$runtime mode=$mode"
+
+  case "$runtime" in
+    docker) : ;;
+    lima) : ;;
+    *) die "--runtime must be docker or lima" ;;
+  esac
+
+  guard_workspace "$PWD" "$force"
+
+  if [[ "$dry" == 1 ]]; then
+    info "dry run; no container started, no secret read"
+    dim "would start: $runtime/$mode in $PWD"
+    return 0
+  fi
+
+  if [[ "$runtime" == lima ]]; then
+    ensure_lima || die "VM unavailable"
+    ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile" 2>/dev/null || true
+    local -a tty=()
+    have_tty && tty=(-it)
+    info "running pi inside a container in VM '$LIMA_NAME'"
+    warn "note: in VM mode the credential is passed to the guest; prefer --runtime docker for tighter key isolation"
+    limactl shell "$LIMA_NAME" -- docker run --rm ${tty[@]+"${tty[@]}"} \
+      -v "$PWD:/workspace" -v pisbx-home:/home/node/.pi \
+      "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"}
+    return $?
+  fi
+
+  if [[ "$mode" == remote ]]; then
+    docker_ok || die "docker unavailable"
+    ensure_image "$IMAGE" "$DOCKER_DIR/Dockerfile.sandbox"
+
+    local token port name dir
+    token="$(openssl rand -hex 32)"
+    port="$(free_port)"
+    name="pisbx-$$-$RANDOM"
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/pisbx.XXXXXX")"
+    chmod 700 "$dir"
+
+    info "starting sandbox daemon on 127.0.0.1:$port"
+    docker run -d --rm --name "$name" \
+      -e PI_DAEMON_TOKEN="$token" \
+      -v "$PWD:/workspace" \
+      -p "127.0.0.1:$port:8787" \
+      "$IMAGE" >/dev/null
+
+    trap "docker rm -f '$name' >/dev/null 2>&1 || true; rm -rf '$dir'" EXIT INT TERM
+    wait_daemon "$name" || die "sandbox daemon failed to start"
+
+    info "tools run in the container; key is written to an ephemeral 0600 agent dir"
+    PI_REMOTE_TOKEN="$token" PISBX_PORT="$port" PISBX_AGENT_DIR="$dir" \
+      skey run --no-redact "$provider" "$variant" --env PISBX_SECRET -y -- \
+      "$0" _launch --provider "$provider" --model "$model" \
+      ${passthru[@]+"${passthru[@]}"}
+    local rc=$?
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    rm -rf "$dir"
+    trap - EXIT INT TERM
+    return $rc
+  fi
+
+  # container mode: whole pi process inside the container
+  docker_ok || die "docker unavailable"
+  ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile"
+  local -a tty=()
+  have_tty && tty=(-it)
+  info "running the whole pi process in the container"
+  skey run --no-redact "$provider" "$variant" --env "$envvar" -y -- \
+    docker run --rm ${tty[@]+"${tty[@]}"} --init \
+      --cap-drop=ALL --security-opt=no-new-privileges \
+      -e "$envvar" \
+      -v "$PWD:/workspace" \
+      -v pisbx-home:/home/node/.pi \
+      "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"}
+}
+
+cmd_vm() {
+  local action="${1:-status}"
+  need_cmd limactl lima || die "lima is not installed"
+  case "$action" in
+    status) printf '%s: %s\n' "$LIMA_NAME" "$(lima_state)" ;;
+    start)
+      case "$(lima_state)" in
+        absent) limactl start --name="$LIMA_NAME" --tty=false template:docker-rootful ;;
+        stopped) limactl start "$LIMA_NAME" ;;
+        running) info "already running" ;;
+      esac ;;
+    stop) limactl stop "$LIMA_NAME" ;;
+    delete) limactl delete "$LIMA_NAME" ;;
+    shell) shift; limactl shell "$LIMA_NAME" -- "$@" ;;
+    *) die "vm: use status|start|stop|delete|shell" ;;
+  esac
+}
+
+cmd_help() {
+  cat <<EOF
+pisbx $PISBX_VERSION - pi with keys in the OS keyring, tools in a container or VM
+
+  pisbx init [--dry-run] [--register]
+      Read ~/.pi/agent/auth.json and register each provider's key in the
+      keyring via skey. Never prints a key.
+
+  pisbx migrate [--dry-run]
+      Back up auth.json and remove its plaintext api_key entries. OAuth
+      entries are preserved. Rollback is printed.
+
+  pisbx bootstrap
+      Write config/docker/Dockerfile{,.sandbox} and build both images.
+
+  pisbx doctor
+      Dependencies, keyring contents, permissions, and plaintext-key warnings.
+
+  pisbx vm status|start|stop|delete|shell
+      Manage the Lima VM.
+
+  pisbx run --model provider/model [options] -- [pi args]
+      Resolve the provider to its environment variable, fetch the secret
+      from the keyring, pick a runtime, and launch pi.
+
+      --runtime docker|lima     where tools execute (default: docker)
+      --mode remote|container   remote = orchestrate on host, tools in
+                                container (default: auto)
+      --force                   allow mounting \$HOME or / as workspace
+      --dry-run                 show the plan without starting anything
+
+  Everything after the known flags is passed to pi, e.g.:
+      pisbx run --model opencode-go/muse-spark-1.3-contributor -p "hi"
+
+  Configuration: \$PISBX_CONFIG_DIR (default ~/.config/pisbx)
+EOF
+}
+
+main() {
+  local sub="${1:-help}"; shift || true
+  case "$sub" in
+    init) cmd_init "$@" ;;
+    migrate) cmd_migrate "$@" ;;
+    doctor) cmd_doctor "$@" ;;
+    bootstrap) cmd_bootstrap "$@" ;;
+    run) cmd_run "$@" ;;
+    vm) cmd_vm "$@" ;;
+    _launch) cmd_launch "$@" ;;
+    version|--version|-v) echo "$PISBX_VERSION" ;;
+    help|-h|--help) cmd_help ;;
+    *) die "unknown command '$sub' (try: pisbx help)" ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,12 @@
+# secrets and machine-local state
+auth.json
+auth.json.*
+*.backup.*
+.env
+.env.*
+config.json
+
+# scratch
+before.txt
+*.log
+.DS_Store
