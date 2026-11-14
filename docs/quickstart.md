@@ -143,6 +143,27 @@ references, and keeps `$ENV` references and OAuth entries. Rollback is printed.
 
 ---
 
+## 3b. Adopt your global setup (recommended)
+
+If your global pi already has extensions, themes, a statusline, and MCP servers,
+migrate them into a reproducible project environment:
+
+```bash
+cd ~/code/my-project
+pisbx migrate --dry-run     # inventory: every extension, interface file, auth entry
+pisbx migrate --register    # adopt, register missing keys, build .pisbx/env
+```
+
+This writes `pisbx.toml`, `pisbx.lock`, `pisbx.pnpm-lock.yaml`, and builds
+`.pisbx/env`. Later:
+
+```bash
+pisbx add pi-effort         # warm sync is sub-second
+pisbx sync                  # rebuild the environment from the lock
+```
+
+See [environment.md](environment.md).
+
 ## 4. Run
 
 ```bash

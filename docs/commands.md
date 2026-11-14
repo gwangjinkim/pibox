@@ -30,21 +30,55 @@ Classification:
 
 ---
 
-## `pisbx migrate [--dry-run]`
+## `pisbx migrate [--dry-run] [--register] [--no-sync] [--keep-auth]`
 
-Backs up `auth.json` to `auth.json.backup.<timestamp>` (mode `600`) and rewrites it:
+Adopts the global pi setup into the current project.
 
-- removes plaintext secrets
-- removes `!command` references that cannot succeed
-- keeps `$ENV_VAR` references and OAuth entries
+Inventory:
 
-Always preview:
+- all extensions from `settings.json` with exact versions
+- interface files: `settings.json`, `mcp.json`, `AGENTS.md`, `SYSTEM.md`,
+  `models-store.json`, `extensions/`, `skills/`, `rules/`, `prompt-templates/`,
+  `themes/`, `statusline/`
+- all `auth.json` entries, classified
+
+Output: `pisbx.toml`, `pisbx.lock`, `.pisbx/env`.
+
+| Option | Effect |
+|---|---|
+| `--dry-run` | print the inventory only |
+| `--register` | register missing providers in the keyring |
+| `--no-sync` | skip building `.pisbx/env` |
+| `--keep-auth` | leave `auth.json` untouched |
+
+`auth.json` is backed up before rewriting; rollback is printed.
+
+## `pisbx export [--global]`
+
+Snapshot package versions into `pisbx.toml` and `pisbx.lock`. By default it reads
+the project environment if one exists, otherwise the global agent directory.
+
+## `pisbx sync`
+
+Recreate `.pisbx/env` from the manifest and lock using pnpm:
+
+- writes `npm/package.json` with exact versions
+- writes `.npmrc` with `auto-install-peers=false`, `strict-peer-dependencies=false`,
+  `ignore-scripts=true`
+- installs from `~/.cache/pisbx/pnpm-store`
+- copies the resulting `pnpm-lock.yaml` to `pisbx.pnpm-lock.yaml` for transitive
+  reproducibility
+
+## `pisbx add` / `pisbx remove`
 
 ```bash
-pisbx migrate --dry-run
+pisbx add pi-effort                 # shorthand for npm:pi-effort
+pisbx add @scope/pkg@1.2.3
+pisbx remove npm:pi-effort
 ```
 
-Rollback is printed at the end.
+`add` resolves the current version when omitted, updates the lock, rewrites the
+manifest, and re-syncs the environment.
 
 ---
 
@@ -185,6 +219,9 @@ limactl start --name=pisbx --tty=false template:docker-rootful
 | `PISBX_SESSION_MODE` | default for `--session-mode` |
 | `PISBX_NO_EXTENSIONS=1` | pass `--no-extensions` in remote mode |
 | `PISBX_REPO` | override the clone path used by `update` |
+| `PISBX_PNPM_STORE` | pnpm store (default `~/.cache/pisbx/pnpm-store`) |
+| `PISBX_OFFLINE=1` | install only from the store |
+| `PISBX_FROZEN=1` | require `pnpm-lock.yaml` to be current |
 | `PI_SESSION_DIR` | override where sessions are discovered |
 | `PI_CODING_AGENT_DIR` | pi agent directory (read-only discovery) |
 

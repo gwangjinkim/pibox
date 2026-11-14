@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.2
+
+- **`migrate` adopts the whole setup:** every extension with its exact version,
+  interface files (`settings.json`, `mcp.json`, `AGENTS.md`, `SYSTEM.md`,
+  `models-store.json`, `extensions/`, `skills/`, `rules/`, `prompt-templates/`,
+  `themes/`, `statusline/`), and all `auth.json` entries. Writes
+  `pisbx.toml`/`pisbx.lock` and builds `.pisbx/env`.
+- **pnpm-backed environments:** `sync` writes an exact `package.json`, suppresses
+  peer auto-install and lifecycle scripts, installs from a shared store, and
+  copies `pnpm-lock.yaml` to `pisbx.pnpm-lock.yaml`.
+- **Relocatable environments:** interface files are copied into `env/base/` and
+  linked relatively, so the environment keeps working when bind-mounted into a
+  container or VM.
+- Measured: cold sync ~8.5s, warm sync ~0.65s, in-box startup ~0.6s with zero
+  install.
+
 ## 0.2.1
 
 - **Config preservation:** the ephemeral agent directory now symlinks the real

@@ -372,6 +372,20 @@ install is the most common source of confusing failures.
 `auto` picks `remote` when the installed `pi` supports `--remote`, otherwise
 `container`.
 
+### How fast is sync?
+
+Measured with the eight extensions from a real global setup, warm pnpm store:
+
+| Step | Time |
+|---|---|
+| `pisbx sync` cold (empty store) | ~8.5s |
+| `pisbx sync` warm (rebuild env) | ~0.65s |
+| `pisbx run` with a prebuilt env inside a container | ~0.6s, zero install |
+
+The environment is installed by **pnpm** into a shared content-addressable store
+(`~/.cache/pisbx/pnpm-store`) and mounted into the container or VM, so the box
+normally installs nothing at all. See [docs/environment.md](docs/environment.md).
+
 ### Extension fidelity
 
 `pisbx` preserves your agent directory: in `remote` and `native` modes it builds an

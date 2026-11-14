@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-PISBX_VERSION="0.3.0"
+PISBX_VERSION="0.3.2"
 CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -368,61 +368,140 @@ cmd_init() {
 }
 
 cmd_migrate() {
-  local dry=0
-  [[ "${1:-}" == "--dry-run" ]] && { dry=1; shift; }
-
-  local auth="$AGENT_DIR/auth.json"
-  [[ -f "$auth" ]] || die "no auth.json at $auth"
-  chmod 600 "$auth" 2>/dev/null || true
-
-  # $VAR   -> safe environment reference, keep it
-  # !cmd   -> shell-out; skey refuses non-interactive get, so this is dead weight
-  # literal-> plaintext secret, must go
-  local plan
-  plan="$(jq -r 'to_entries[] |
-      ( .value.key // "" ) as $k |
-      ( if   ($k | startswith("$")) then "keep-env"
-        elif ($k | startswith("!")) then "remove-cmd"
-        elif ($k == "")             then "remove-empty"
-        else                             "remove-literal" end ) as $kind |
-      select(.value.type == "api_key") |
-      "\($kind)\t\(.key)"' "$auth" 2>/dev/null || true)"
-
-  if [[ -z "$plan" ]]; then
-    info "no api_key entries in auth.json (nothing to migrate)"
-    return 0
-  fi
-
-  printf '%s\n' "$plan" | while IFS=$'\t' read -r kind name; do
-    case "$kind" in
-      keep-env)        dim "$name: env reference, kept" ;;
-      remove-cmd)      warn "$name: shell-out reference, removed (skey get is interactive-only)" ;;
-      remove-literal)  warn "$name: plaintext key, removed" ;;
-      remove-empty)    dim "$name: empty entry, removed" ;;
+  local dry=0 register=0 do_sync=1 keep_auth=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --register) register=1; shift ;;
+      --no-sync) do_sync=0; shift ;;
+      --keep-auth) keep_auth=1; shift ;;
+      *) die "migrate: unknown option $1" ;;
     esac
   done
 
+  local auth="$AGENT_DIR/auth.json" settings="$AGENT_DIR/settings.json"
+  local root="$PWD" tmp count
+
+  info "inspecting $AGENT_DIR"
+
+  # 1. extensions
+  local packages=()
+  if [[ -f "$settings" ]]; then
+    while IFS= read -r src; do [[ -n "$src" ]] && packages+=("$src"); done \
+      < <(jq -r '.packages[]? // empty' "$settings" 2>/dev/null)
+  fi
+  printf '  extensions: %d\n' "${#packages[@]}"
+  local src name ver
+  for src in ${packages[@]+"${packages[@]}"}; do
+    case "$src" in
+      npm:*)
+        name="$(printf '%s' "${src#npm:}" | sed 's/@[^@/]*$//')"
+        ver="$(jq -r .version "$AGENT_DIR/npm/node_modules/$name/package.json" 2>/dev/null || true)"
+        ;;
+      *) name="$src"; ver="$(printf '%s' "$src" | sed -n 's/.*@//p')"; [[ -n "$ver" ]] || ver=path ;;
+    esac
+    printf '    %-45s %s\n' "$src" "${ver:-unknown}"
+  done
+
+  # 2. interface files
+  printf '  interface:\n'
+  local f d
+  for f in settings.json mcp.json AGENTS.md SYSTEM.md models-store.json; do
+    [[ -e "$AGENT_DIR/$f" ]] && printf '    file  %s\n' "$f"
+  done
+  for d in extensions skills rules prompt-templates themes statusline; do
+    [[ -e "$AGENT_DIR/$d" ]] && printf '    dir   %s/\n' "$d"
+  done
+
+  # 3. auth entries
+  local auth_plan=""
+  if [[ -f "$auth" ]]; then
+    auth_plan="$(jq -r 'to_entries[] |
+        ( .value.key // "" ) as $k |
+        ( if   ($k | startswith("$")) then "keep-env"
+          elif ($k | startswith("!")) then "remove-cmd"
+          elif ($k == "")             then "remove-empty"
+          else                             "remove-literal" end ) as $kind |
+        select(.value.type == "api_key") |
+        "\($kind)\t\(.key)"' "$auth" 2>/dev/null || true)"
+    printf '  credentials:\n'
+    if [[ -z "$auth_plan" ]]; then
+      printf '    (none in auth.json)\n'
+    else
+      printf '%s\n' "$auth_plan" | while IFS=$'\t' read -r kind who; do
+        printf '    %-16s %s\n' "$kind" "$who"
+      done
+    fi
+  fi
+
   if [[ "$dry" == 1 ]]; then
-    info "dry run: would write $auth.backup.<timestamp> and drop removed entries"
+    info "dry run: would write $root/pisbx.toml, pisbx.lock, and .pisbx/env"
     return 0
   fi
 
-  local backup="$auth.backup.$(date +%Y%m%d%H%M%S)"
-  cp -p "$auth" "$backup"; chmod 600 "$backup"
-  info "backup written: $backup"
+  # 4. build the lock from global packages
+  tmp="$(mktemp)"
+  printf '{"version":1,"pi":"%s","extensions":{}}\n' "$(pi_version)" >"$tmp"
+  for src in ${packages[@]+"${packages[@]}"}; do
+    case "$src" in
+      npm:*)
+        name="$(printf '%s' "${src#npm:}" | sed 's/@[^@/]*$//')"
+        ver="$(jq -r .version "$AGENT_DIR/npm/node_modules/$name/package.json" 2>/dev/null || true)"
+        [[ -n "$ver" ]] || ver="$(resolve_source_version "$src")"
+        ;;
+      *)
+        ver="$(printf '%s' "$src" | sed -n 's/.*@//p')"
+        [[ -n "$ver" ]] || ver=path
+        src="$(printf '%s' "$src" | sed 's/@[^@/]*$//')"
+        ;;
+    esac
+    jq --arg s "$src" --arg v "$ver" '.extensions[$s] = $v' "$tmp" >"$tmp.2" && mv "$tmp.2" "$tmp"
+  done
 
-  local tmp="$auth.tmp.$$"
-  jq 'with_entries(
-        select(
-          .value.type != "api_key"
-          or ((.value.key // "") | startswith("$"))
-        )
-      )' "$auth" >"$tmp"
-  chmod 600 "$tmp"; mv "$tmp" "$auth"
+  # merge with an existing project lock; project entries win
+  if [[ -f "$(lock_path "$root")" ]]; then
+    jq -s '.[0] as $e | .[1] as $g | $g | .extensions = ($g.extensions * $e.extensions)' \
+      "$(lock_path "$root")" "$tmp" >"$tmp.3" && mv "$tmp.3" "$(lock_path "$root")"
+    rm -f "$tmp"
+  else
+    mv "$tmp" "$(lock_path "$root")"
+  fi
+  write_manifest "$root" "$(lock_path "$root")"
+  info "wrote $(manifest_path "$root") and $(lock_path "$root")"
 
-  info "auth.json now contains only OAuth entries and env references"
-  dim "keys are injected per run by: pisbx run --model provider/model"
-  dim "rollback: cp $backup $auth"
+  # 5. register credentials if asked
+  if [[ "$register" == 1 && -f "$auth" ]]; then
+    local provider
+    while IFS= read -r provider; do
+      [[ -n "$provider" ]] || continue
+      if skey_has "$provider"; then dim "$provider: already in keyring"; continue; fi
+      if provider_env "$provider" >/dev/null 2>&1; then
+        info "registering $provider"
+        skey set "$provider" default
+        cfg_set "$provider" variant default
+        cfg_set "$provider" env "$(provider_env "$provider")"
+      else
+        warn "$provider: unknown provider, skipped"
+      fi
+    done < <(jq -r 'to_entries[] | select(.value.type == "api_key") | .key' "$auth" 2>/dev/null)
+  fi
+
+  # 6. clean auth.json (backup + classify)
+  if [[ "$keep_auth" != 1 && -f "$auth" ]]; then
+    local backup="$auth.backup.$(date +%Y%m%d%H%M%S)"
+    cp -p "$auth" "$backup"; chmod 600 "$backup"
+    info "backup written: $backup"
+    jq 'with_entries(select(.value.type != "api_key" or ((.value.key // "") | startswith("$"))))' \
+      "$auth" >"$auth.tmp.$$"
+    chmod 600 "$auth.tmp.$$"; mv "$auth.tmp.$$" "$auth"
+    dim "auth.json keeps OAuth entries and \$ENV references"
+  fi
+
+  # 7. build the environment
+  if [[ "$do_sync" == 1 ]]; then
+    sync_env "$root"
+  fi
+  info "migration complete"
 }
 
 scan_plaintext() {
@@ -844,21 +923,34 @@ write_lock_from_toml() {
 }
 
 seed_env() {
-  local root="$1" env f d
+  local root="$1" env base f d
   env="$(env_path "$root")"
+  base="$env/base"
   rm -rf "$env"
-  mkdir -p "$env/npm"
+  mkdir -p "$env/npm" "$base"
+
   if [[ -f "$AGENT_DIR/settings.json" ]]; then
     jq 'del(.packages)' "$AGENT_DIR/settings.json" >"$env/settings.json"
   else
     printf '{}\n' >"$env/settings.json"
   fi
-  for f in mcp.json AGENTS.md SYSTEM.md models-store.json; do
-    [[ -e "$AGENT_DIR/$f" ]] && cp -R "$AGENT_DIR/$f" "$env/$f"
+
+  # interface files: copied into base/, exposed with relative links so the
+  # environment still works when it is mounted into a container or VM
+  for f in AGENTS.md SYSTEM.md mcp.json models-store.json; do
+    if [[ -e "$AGENT_DIR/$f" ]]; then
+      cp -R "$AGENT_DIR/$f" "$base/$f"
+      ln -s "base/$f" "$env/$f"
+    fi
   done
-  for d in sessions extensions statusline themes skills rules prompt-templates cache; do
-    [[ -e "$AGENT_DIR/$d" ]] && ln -s "$AGENT_DIR/$d" "$env/$d"
+  for d in extensions skills rules prompt-templates themes statusline; do
+    if [[ -e "$AGENT_DIR/$d" ]]; then
+      cp -R "$AGENT_DIR/$d" "$base/$d"
+      ln -s "base/$d" "$env/$d"
+    fi
   done
+  # sessions stay global; containers mount over this path
+  [[ -e "$AGENT_DIR/sessions" ]] && ln -s "$AGENT_DIR/sessions" "$env/sessions"
 }
 
 spec_for() {
@@ -869,22 +961,58 @@ spec_for() {
   esac
 }
 
+pnpm_store() {
+  printf '%s' "${PISBX_PNPM_STORE:-${XDG_CACHE_HOME:-$HOME/.cache}/pisbx/pnpm-store}"
+}
+
 sync_env() {
-  local root="$1" env source version spec
+  local root="$1" env store source version spec deps pkgs pm
   env="$(env_path "$root")"
+  store="$(pnpm_store)"
   [[ -f "$(lock_path "$root")" ]] || write_lock_from_toml "$root"
+
   info "creating environment in $env"
   seed_env "$root"
+  mkdir -p "$store"
+
+  # npm sources are installed by the package manager as one resolution
+  deps="$(jq -c '[.extensions | to_entries[] | select(.key | startswith("npm:")) | {key:(.key | sub("^npm:"; "")), value:.value}] | from_entries' "$(lock_path "$root")")"
+  printf '{"name":"pisbx-env","private":true,"dependencies":%s}\n' "$deps" >"$env/npm/package.json"
+  printf 'auto-install-peers=false\nstrict-peer-dependencies=false\nignore-scripts=true\n' >"$env/npm/.npmrc"
+
+  # reuse the committed lock for transitive reproducibility
+  [[ -f "$root/pisbx.pnpm-lock.yaml" ]] && cp "$root/pisbx.pnpm-lock.yaml" "$env/npm/pnpm-lock.yaml"
+
+  if command -v pnpm >/dev/null 2>&1; then
+    pm=pnpm
+    local -a flags=(--dir "$env/npm" --store-dir "$store" --reporter silent --ignore-scripts)
+    if [[ "${PISBX_OFFLINE:-0}" == 1 ]]; then flags+=(--offline); else flags+=(--prefer-offline); fi
+    if [[ "${PISBX_FROZEN:-0}" == 1 && -f "$env/npm/pnpm-lock.yaml" ]]; then flags+=(--frozen-lockfile); fi
+    dim "pnpm install (store: $store)"
+    pnpm install ${flags[@]+"${flags[@]}"} >/dev/null || { warn "pnpm install failed"; return 1; }
+    [[ -f "$env/npm/pnpm-lock.yaml" ]] && cp "$env/npm/pnpm-lock.yaml" "$root/pisbx.pnpm-lock.yaml"
+  else
+    pm=npm
+    dim "pnpm not found; falling back to npm"
+    ( cd "$env/npm" && npm install --no-audit --no-fund --prefer-offline --ignore-scripts >/dev/null ) || {
+      warn "npm install failed"; return 1
+    }
+  fi
+
+  # non-npm sources keep using pi's own installer
   while IFS=$'\t' read -r source version; do
-    [[ -n "$source" ]] || continue
+    case "$source" in npm:*) continue ;; esac
     spec="$(spec_for "$source" "$version")"
     dim "install $spec"
-    PI_CODING_AGENT_DIR="$env" pi install "$spec" -na >/dev/null || {
-      warn "failed to install $spec"
-      return 1
-    }
+    PI_CODING_AGENT_DIR="$env" pi install "$spec" -na >/dev/null || { warn "failed to install $spec"; return 1; }
   done < <(jq -r '.extensions | to_entries[] | [.key, .value] | @tsv' "$(lock_path "$root")")
-  info "environment ready ($(jq -r '.extensions | length' "$(lock_path "$root")") extensions)"
+
+  # settings.packages must mirror the manifest exactly
+  pkgs="$(jq -c '[.extensions | to_entries[] | .key + (if .value == "path" or .value == "" then "" else "@" + .value end)]' "$(lock_path "$root")")"
+  jq --argjson p "$pkgs" '.packages = $p' "$env/settings.json" >"$env/settings.json.tmp.$$" \
+    && mv "$env/settings.json.tmp.$$" "$env/settings.json"
+
+  info "environment ready ($(jq -r '.extensions | length' "$(lock_path "$root")") extensions via $pm)"
 }
 
 resolve_source_version() {
@@ -928,10 +1056,7 @@ cmd_export() {
       [[ -n "$source" ]] || continue
       case "$source" in
         npm:*)
-          name="${source#npm:}"; name="${name%@*}"
-          case "$name" in
-            @*/*) name="${source#npm:}"; name="${name%@*}" ;;
-          esac
+          name="$(printf '%s' "${source#npm:}" | sed 's/@[^@/]*$//')"
           pkgjson="$env/npm/node_modules/$name/package.json"
           if [[ -f "$pkgjson" ]]; then
             version="$(jq -r .version "$pkgjson")"
@@ -1113,9 +1238,12 @@ COMMANDS
       Read ~/.pi/agent/auth.json and register each provider's key in the
       keyring via skey. Never prints a key.
 
-  migrate [--dry-run]
-      Back up auth.json and remove plaintext keys and dead !command
-      references. Keeps \$ENV references and OAuth entries.
+  migrate [--dry-run] [--register] [--no-sync] [--keep-auth]
+      Adopt the global pi setup into this project: every installed
+      extension with its exact version, interface files (settings,
+      mcp, AGENTS, SYSTEM, themes, statusline, skills, rules,
+      prompts), and auth.json entries. Writes pisbx.toml / pisbx.lock
+      and builds .pisbx/env.
 
   bootstrap
       Write config/docker/Dockerfile{,.sandbox} and build both images.
@@ -1190,6 +1318,9 @@ ENVIRONMENT
   PISBX_SESSION_MODE     default for --session-mode
   PISBX_NO_EXTENSIONS=1  pass --no-extensions in remote mode
   PISBX_REPO             override the clone path used by update
+  PISBX_PNPM_STORE       pnpm store (default ~/.cache/pisbx/pnpm-store)
+  PISBX_OFFLINE=1        install only from the store
+  PISBX_FROZEN=1         require pnpm-lock.yaml to be up to date
 EOF
 }
 main() {
