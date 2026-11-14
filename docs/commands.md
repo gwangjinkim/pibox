@@ -90,7 +90,8 @@ Writes `~/.config/pisbx/docker/Dockerfile` and `Dockerfile.sandbox`, then builds
 `bootstrap` always rebuilds (cached layers are reused).
 
 `--dev` builds `pisbx-full-dev` and `pisbx-sandbox-dev`: Alpine plus python3/pip/uv,
-node/npm/pnpm/yarn, typescript/tsx, gcc/g++/make, and modern Rust CLI tools
+node/npm/pnpm/yarn, typescript/tsx, go/gopls/delve,
+rust/cargo/rustfmt/clippy/rust-analyzer, gcc/g++/make, and modern Rust CLI tools
 (rg, fd, bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide,
 just).
 

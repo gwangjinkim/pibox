@@ -316,7 +316,7 @@ the steps instead of running anything.
 
 ### Toolchains and runtime installs
 
-| | `--minimal` (155 MB) | `--dev` (~650 MB) | `standard` (733 MB) |
+| | `--minimal` (155 MB) | `--dev` (~1.6 GB) | `standard` (733 MB) |
 |---|---|---|---|
 | base | Alpine | Alpine | Debian bookworm |
 | pi | single Bun binary | single Bun binary | npm install |
@@ -327,10 +327,16 @@ the steps instead of running anything.
 | node + npm | **no** | yes | yes |
 | pnpm / yarn | **no** | yes | **no** |
 | typescript / tsx | **no** | yes | **no** |
+| go + gopls + delve | **no** | yes | **no** |
+| rust + cargo + rustfmt + clippy + rust-analyzer | **no** | yes | **no** |
 | gcc / g++ / make | **no** | yes | yes |
 | jq | **no** | yes | yes |
 | Rust CLI tools | rg, fd | rg, fd, bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide, just | rg, fd |
 | runs as | uid 1000 | uid 1000 | uid 1000 |
+
+`--dev` is a polyglot image: Python, JavaScript/TypeScript, Go, and Rust with
+their tooling, plus modern Rust CLI tools. It is large (Rust alone is ~520 MB),
+so use `--minimal` unless you need the toolchains.
 
 The agent cannot install system packages by default. In `container` mode you can
 grant that with `--root`:

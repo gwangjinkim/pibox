@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-PISBX_VERSION="0.7.1"
+PISBX_VERSION="0.8.0"
 CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -1072,13 +1072,16 @@ DOCKER
 
 - Alpine Linux. Use apk, not apt-get.
 - Preinstalled runtimes: python3, pip, uv, node, npm, pnpm, yarn, typescript,
-  tsx, gcc, g++, make.
+  tsx, go (gopls, delve), rust (cargo, rustfmt, clippy, rust-analyzer),
+  gcc, g++, make.
 - Prefer modern Rust CLI tools over busybox/GNU equivalents:
   rg (grep), fd (find), bat (cat), sd (sed), eza (ls), dust (du),
   procs (ps), btm (top), delta (diff), hyperfine (time), tokei (loc),
   hexyl (hex), zoxide.
 - Python: `python3`, `uv` for fast installs and venvs, or `pip install --user`.
 - Node/TS: `node`, `npm`, `pnpm`, `yarn`, `tsc`, `tsx`.
+- Go: `go`, `gopls`, `dlv`. Rust: `cargo`, `rustc`, `rustfmt`, `cargo clippy`,
+  `rust-analyzer`.
 - The project is mounted at /workspace; it is the only host path you can reach.
 - You run as uid 1000; system packages need --root and: apk add --no-cache <pkg>
 EOF'
@@ -1099,12 +1102,13 @@ FROM alpine:3.20
 RUN --mount=type=cache,target=/var/cache/apk \
     apk update && apk add bash ca-certificates curl git ripgrep fd libstdc++ \
       jq less python3 py3-pip nodejs npm build-base \
-      bat eza sd dust procs bottom delta hyperfine tokei watchexec hexyl zoxide just
+      bat eza sd dust procs bottom delta hyperfine tokei watchexec hexyl zoxide just \
+      go gopls delve rust cargo rust-analyzer rustfmt rust-clippy
 RUN python3 -m pip install --break-system-packages --no-cache-dir uv \
     && npm install -g pnpm yarn typescript tsx \
     && npm cache clean --force
 RUN adduser -D -u 1000 -h /home/node node
-RUN mkdir -p /home/node/.pi /home/node/.npm-global && chown -R 1000:1000 /home/node
+RUN mkdir -p /home/node/.pi /home/node/.npm-global /home/node/go /home/node/.cache/go-build /home/node/.cargo && chown -R 1000:1000 /home/node
 $dev_note
 COPY --from=build /out /opt/pi
 RUN ln -s /opt/pi/pi /usr/local/bin/pi
@@ -1133,12 +1137,13 @@ FROM alpine:3.20
 RUN --mount=type=cache,target=/var/cache/apk \
     apk update && apk add bash ca-certificates curl git ripgrep fd libstdc++ \
       jq less python3 py3-pip nodejs npm build-base \
-      bat eza sd dust procs bottom delta hyperfine tokei watchexec hexyl zoxide just
+      bat eza sd dust procs bottom delta hyperfine tokei watchexec hexyl zoxide just \
+      go gopls delve rust cargo rust-analyzer rustfmt rust-clippy
 RUN python3 -m pip install --break-system-packages --no-cache-dir uv \
     && npm install -g pnpm yarn typescript tsx \
     && npm cache clean --force
 RUN adduser -D -u 1000 -h /home/node node
-RUN mkdir -p /home/node/.pi /home/node/.npm-global && chown -R 1000:1000 /home/node
+RUN mkdir -p /home/node/.pi /home/node/.npm-global /home/node/go /home/node/.cache/go-build /home/node/.cargo && chown -R 1000:1000 /home/node
 $dev_note
 COPY --from=build /out /opt/pi
 RUN ln -s /opt/pi/pi /usr/local/bin/pi
@@ -1942,7 +1947,7 @@ COMMANDS
       Required once before the first run.
       --minimal  Alpine + single binary, no toolchain (~155MB)
       --dev      Alpine + single binary + python3/uv, node/npm/pnpm/yarn,
-                 typescript/tsx, gcc/make, Rust CLI tools (~650MB)
+                 typescript/tsx, go, rust, gcc/make, Rust CLI tools (~1.6GB)
       --standard Debian + full toolchain (~730MB)
 
   update [--check] [--no-bootstrap] [--force]
