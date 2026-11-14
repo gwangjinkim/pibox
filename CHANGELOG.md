@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.2
+
+- **Fix: container and lima modes now mount the project environment.** The
+  environment was detected and reported but never added to `docker run`, so
+  sandboxed container sessions had no extensions installed. Container/lima now
+  mount `.pisbx/env` at `/home/node/.pi/agent`, the pnpm store under
+  `/home/node/.cache/pisbx/pnpm-store`, and sessions inside the mounted env.
+- Verified in a migrated project: `pi list` inside the container shows all 8
+  packages under `/home/node/.pi/agent/npm/...` with no extension load errors.
+
 ## 0.5.1
 
 - **Auto mode fix:** a project with `pisbx.toml` now selects `container`, so

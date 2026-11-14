@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-PISBX_VERSION="0.5.1"
+PISBX_VERSION="0.5.2"
 CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -1193,10 +1193,19 @@ cmd_run() {
     ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile" 2>/dev/null || true
     local -a tty=()
     have_tty && tty=(-it)
+    local sbase sessions_target store
+    sbase="$(session_base)"; sessions_target="/home/node/.pi/sessions"
+    store="$(pnpm_store)"
+    local -a envmount=()
+    if [[ -n "${PISBX_BASE_DIR:-}" ]]; then
+      envmount=(-v "$PISBX_BASE_DIR:/home/node/.pi/agent")
+      sessions_target="/home/node/.pi/agent/sessions"
+    fi
+    envmount+=(-v "$store:/home/node/.cache/pisbx/pnpm-store")
     info "running pi inside a container in VM '$LIMA_NAME'"
-    warn "note: in VM mode the credential is passed to the guest; prefer --runtime docker for tighter key isolation"
-    limactl shell "$LIMA_NAME" -- docker run --rm ${tty[@]+"${tty[@]}"} \
-      -v "$(workspace_src):/workspace" -v pisbx-home:/home/node/.pi \
+    warn "note: VM mode passes the credential to the guest; prefer --runtime docker for tighter key isolation"
+    limactl shell "$LIMA_NAME" -- docker run --rm ${tty[@]+"${tty[@]}"} ${envmount[@]+"${envmount[@]}"} \
+      -v "$(workspace_src):/workspace" -v "$sbase:$sessions_target" -v pisbx-home:/home/node/.pi \
       "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"}
     return $?
   fi
@@ -1246,16 +1255,25 @@ cmd_run() {
   # container mode: whole pi process inside the container
   docker_ok || die "docker unavailable"
   ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile"
-  local sbase sessions_target; sbase="$(session_base)"; mkdir -p "$sbase"
+  local sbase sessions_target store; sbase="$(session_base)"; mkdir -p "$sbase"
   sessions_target="/home/node/.pi/sessions"
+  store="$(pnpm_store)"; mkdir -p "$store"
+  local -a envmount=()
+  if [[ -n "${PISBX_BASE_DIR:-}" ]]; then
+    envmount=(-v "$PISBX_BASE_DIR:/home/node/.pi/agent")
+    sessions_target="/home/node/.pi/agent/sessions"
+  fi
+  envmount+=(-v "$store:/home/node/.cache/pisbx/pnpm-store" -e "PISBX_PNPM_STORE=/home/node/.cache/pisbx/pnpm-store")
   local -a tty=()
   have_tty && tty=(-it)
   info "running the whole pi process in the container"
   skey run --no-redact "$provider" "$variant" --env "$envvar" -y -- \
-    docker run --rm ${tty[@]+"${tty[@]}"} --init \
+    docker run --rm ${tty[@]+"${tty[@]}"} --label pisbx=1 --init \
       --cap-drop=ALL --security-opt=no-new-privileges \
       -e "$envvar" \
       -v "$(workspace_src):/workspace" \
+      ${envmount[@]+"${envmount[@]}"} \
+      -v "$sbase:$sessions_target" \
       -v pisbx-home:/home/node/.pi \
       "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"}
 }
