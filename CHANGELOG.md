@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.0.1
+
+- **Fix preflight option 1:** choosing "migrate this project, then continue in
+  container mode" now runs `pibox migrate` and continues the same run. It
+  previously exited silently.
+- `q` prints `aborted.`; dry runs show what option 1 would do without changing
+  anything.
+
+## 1.0.0
+
+- Renamed to `pibox`; `pisbx` shim, `PISBX_*` compatibility, config migration.
+- Composable images: `pibox bootstrap --with python,node,go,rust,build,cli`.
+- `docs/combinations.md` with measured sizes.
+- Image sizes: none 155 MB, cli 188 MB, python 260 MB, node 311 MB,
+  build 363 MB, go 373 MB, rust 996 MB, node+rust+build 1.20 GB, all ~1.6 GB.
+
+## 0.9.0
+
+- Composable `--with` features and aliases (`py`, `js`, `ts`, `rs`, `cc`,
+  `tools`, `all`), image tags encoding the selection, config persistence.
+- Verified C + Rust + TypeScript (`FRIEND_RUST_C_TS_OK`).
+
+## 0.8.0
+
+- Go (`go`, `gopls`, `delve`) and Rust (`cargo`, `rustfmt`, `clippy`,
+  `rust-analyzer`) in `--dev`; caches under the agent home.
+- Verified `go run` and `rustc` (`GO_RUST_OK`).
+
+## 0.7.1
+
+- `--dev`: python3/pip/uv, node/npm/pnpm/yarn, typescript/tsx, gcc/make, and
+  Rust CLI tools (rg, fd, bat, eza, sd, dust, procs, btm, delta, hyperfine,
+  tokei, hexyl, zoxide, just).
+- Verified TypeScript, Python (`uv`), C (`DEV_ALL_OK`).
+
+## 0.7.0
+
+- New `--dev` Alpine variant with a full development toolchain.
+
+## 0.6.1
+
+- `--root` for runtime `apk add` in container mode.
+- `/home/node/.pi/AGENTS.md` environment notes in images.
+- `bootstrap` always rebuilds.
+
+## 0.6.0
+
+- `bootstrap --minimal`: Alpine + Bun-compiled single binary (~155 MB).
+
 ## Installer
 
 - `install.sh` now detects the OS and package manager, lists missing

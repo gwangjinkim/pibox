@@ -525,7 +525,7 @@ Extensions written against `@earendil-works/*` cannot load there. If your global
 with three options instead of printing load errors:
 
 ```
-1) pibox migrate && pibox run --mode container   sandboxed, extensions work
+1) migrate this project, then continue in container mode
 2) pibox run --mode native                       no sandbox, exact setup
 3) pibox run --no-extensions                     sandboxed, extensions off
 ```
