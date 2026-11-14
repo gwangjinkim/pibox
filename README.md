@@ -314,43 +314,36 @@ If a command fails, the exact manual steps for that dependency are printed and
 the installer continues with the next one. In a non-interactive shell it prints
 the steps instead of running anything.
 
-### Toolchains and runtime installs
+### Composable images
 
-| | `--minimal` (155 MB) | `--dev` (~1.6 GB) | `standard` (733 MB) |
-|---|---|---|---|
-| base | Alpine | Alpine | Debian bookworm |
-| pi | single Bun binary | single Bun binary | npm install |
-| shell | bash + busybox | bash + busybox | bash + coreutils |
-| git / curl | yes | yes | yes |
-| python3 + pip | **no** | yes | yes |
-| uv | **no** | yes | **no** |
-| node + npm | **no** | yes | yes |
-| pnpm / yarn | **no** | yes | **no** |
-| typescript / tsx | **no** | yes | **no** |
-| go + gopls + delve | **no** | yes | **no** |
-| rust + cargo + rustfmt + clippy + rust-analyzer | **no** | yes | **no** |
-| gcc / g++ / make | **no** | yes | yes |
-| jq | **no** | yes | yes |
-| Rust CLI tools | rg, fd | rg, fd, bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide, just | rg, fd |
-| runs as | uid 1000 | uid 1000 | uid 1000 |
-
-`--dev` is a polyglot image: Python, JavaScript/TypeScript, Go, and Rust with
-their tooling, plus modern Rust CLI tools. It is large (Rust alone is ~520 MB),
-so use `--minimal` unless you need the toolchains.
-
-The agent cannot install system packages by default. In `container` mode you can
-grant that with `--root`:
+Build only the toolchains you need. `pi` is always included.
 
 ```bash
-pisbx run --mode container --root --model provider/model
-# inside: apk add --no-cache python3
+pisbx bootstrap --with python
+pisbx bootstrap --with node,rust,build
+pisbx bootstrap --with python,node,go,rust,build,cli
 ```
 
-`--root` is rejected in `remote` mode (the daemon refuses root).
+| Feature | Aliases | Adds |
+|---|---|---|
+| `python` | `py`, `uv` | python3, pip, venv, **uv** |
+| `node` | `js`, `ts`, `typescript` | node, npm, pnpm, yarn, typescript, tsx |
+| `go` | `golang` | go, gopls, delve |
+| `rust` | `rs` | rust, cargo, rustfmt, clippy, rust-analyzer |
+| `build` | `cc`, `c`, `gcc` | gcc, g++, make |
+| `cli` | `tools` | bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide, just |
 
-Both images ship `/home/node/.pi/AGENTS.md` describing the environment, so the
-model knows whether to use `apk` or `apt-get`. Verified with DeepSeek V4.1 Flash:
-it detected Alpine, used `apk`, installed `python3`, and verified it.
+Always present: `pi`, `bash`, `git`, `curl`, `jq`, `less`, `rg`, `fd`.
+
+| Shortcut | Meaning | Approx size |
+|---|---|---|
+| `--minimal` | `--with none` | 155 MB |
+| `--with node,rust,build` | TypeScript + Rust + C | 1.26 GB |
+| `--with all` / `--dev` | everything | 1.6 GB |
+| `--standard` | Debian + toolchain | 733 MB |
+
+Image tags encode the selection, e.g. `pisbx-full-dev-js-rs-cc`. The choice is
+stored in config, so `pisbx run` uses it automatically.
 
 ### `./install.sh --check` (install nothing)
 

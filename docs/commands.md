@@ -82,30 +82,29 @@ manifest, and re-syncs the environment.
 
 ---
 
-## `pisbx bootstrap [--minimal|--standard]`
+## `pisbx bootstrap [--with LIST | --minimal | --dev | --standard]`
 
-Writes `~/.config/pisbx/docker/Dockerfile` and `Dockerfile.sandbox`, then builds
-`pisbx-full` and `pisbx-sandbox`.
+Builds both images. Features can be combined:
 
-`bootstrap` always rebuilds (cached layers are reused).
+| Feature | Aliases | Adds |
+|---|---|---|
+| python | py, uv | python3, pip, venv, uv |
+| node | js, ts, typescript | node, npm, pnpm, yarn, typescript, tsx |
+| go | golang | go, gopls, delve |
+| rust | rs | rust, cargo, rustfmt, clippy, rust-analyzer |
+| build | cc, c, gcc | gcc, g++, make |
+| cli | tools | bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide, just |
 
-`--dev` builds `pisbx-full-dev` and `pisbx-sandbox-dev`: Alpine plus python3/pip/uv,
-node/npm/pnpm/yarn, typescript/tsx, go/gopls/delve,
-rust/cargo/rustfmt/clippy/rust-analyzer, gcc/g++/make, and modern Rust CLI tools
-(rg, fd, bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide,
-just).
+```bash
+pisbx bootstrap --with node,rust,build
+pisbx bootstrap --minimal        # none
+pisbx bootstrap --dev            # all
+pisbx bootstrap --standard       # Debian
+```
 
-`--minimal` builds `pisbx-full-min` and `pisbx-sandbox-min`: Alpine + a
-Bun-compiled single pi binary (~155 MB each instead of ~730 MB). The choice is
-stored as `defaults.variant`; `PISBX_VARIANT` overrides it, and `PISBX_IMAGE` /
-`PISBX_IMAGE_FULL` override the tags.
-
-Must be run:
-
-- after `install.sh`
-- after `pisbx update` (unless you pass `--no-bootstrap`)
-
----
+Image names include the selection, e.g. `pisbx-full-dev-js-rs-cc`. The choice is
+stored as `defaults.variant=alpine`, `defaults.features`, `defaults.image`, and
+`defaults.image_full`; `PISBX_IMAGE` / `PISBX_IMAGE_FULL` override the tags.
 
 ## `pisbx doctor`
 

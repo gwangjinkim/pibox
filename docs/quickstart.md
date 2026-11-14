@@ -174,22 +174,34 @@ pisbx sync                  # rebuild the environment from the lock
 
 See [environment.md](environment.md).
 
-## 3c. Toolchains
+## 3c. Toolchains (composable)
 
-| Image | Contains | Use when |
+```bash
+pisbx bootstrap --with python
+pisbx bootstrap --with node,rust,build      # TypeScript + Rust + C
+pisbx bootstrap --with python,node,go,rust,build,cli
+```
+
+| Feature | Aliases | Adds |
 |---|---|---|
-| `--minimal` (155 MB) | pi, bash/busybox, git, rg, fd, curl | read/edit/run simple commands |
-| `--dev` (~1.6 GB) | + python3/pip/uv, node/npm/pnpm/yarn, typescript/tsx, go/gopls/delve, rust/cargo/rustfmt/clippy/rust-analyzer, gcc/g++/make, and Rust CLI tools (bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide, just) | polyglot development |
-| `standard` (733 MB) | Debian + python3, make, g++, node/npm, jq | when you need glibc/Debian |
+| python | py, uv | python3, pip, venv, uv |
+| node | js, ts, typescript | node, npm, pnpm, yarn, typescript, tsx |
+| go | golang | go, gopls, delve |
+| rust | rs | rust, cargo, rustfmt, clippy, rust-analyzer |
+| build | cc, c, gcc | gcc, g++, make |
+| cli | tools | bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide, just |
 
-Nothing is installed as root by default. For runtime installs in `container` mode:
+`pi`, bash, git, curl, jq, rg and fd are always included.
+
+Shortcuts: `--minimal` (none, 155 MB), `--dev`/`--with all` (1.6 GB),
+`--standard` (Debian, 733 MB). The selection is remembered in config.
+
+Nothing is installed as root by default. For extra system packages in
+`container` mode:
 
 ```bash
 pisbx run --mode container --root --model provider/model   # then: apk add ...
 ```
-
-Images include `/home/node/.pi/AGENTS.md`, so the model knows it is on Alpine and
-uses `apk` (verified with DeepSeek V4.1 Flash).
 
 ## 4. Run
 

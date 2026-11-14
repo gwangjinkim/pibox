@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-PISBX_VERSION="0.8.0"
+PISBX_VERSION="0.9.0"
 CFG_DIR="${PISBX_CONFIG_DIR:-$HOME/.config/pisbx}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -438,16 +438,22 @@ cmd_work() {
 resolve_images() {
   local v="${PISBX_VARIANT:-$(cfg_default variant)}"
   v="${v:-standard}"
-  if [[ "$v" == minimal ]]; then
-    IMAGE="${PISBX_IMAGE:-pisbx-sandbox-min}"
-    IMAGE_FULL="${PISBX_IMAGE_FULL:-pisbx-full-min}"
-  elif [[ "$v" == dev ]]; then
-    IMAGE="${PISBX_IMAGE:-pisbx-sandbox-dev}"
-    IMAGE_FULL="${PISBX_IMAGE_FULL:-pisbx-full-dev}"
-  else
-    IMAGE="${PISBX_IMAGE:-pisbx-sandbox}"
-    IMAGE_FULL="${PISBX_IMAGE_FULL:-pisbx-full}"
-  fi
+  case "$v" in
+    standard)
+      IMAGE="pisbx-sandbox"; IMAGE_FULL="pisbx-full" ;;
+    minimal)
+      IMAGE="pisbx-sandbox-min"; IMAGE_FULL="pisbx-full-min" ;;
+    dev)
+      IMAGE="pisbx-sandbox-dev"; IMAGE_FULL="pisbx-full-dev" ;;
+    alpine)
+      IMAGE="$(cfg_default image)"; IMAGE_FULL="$(cfg_default image_full)"
+      [[ -n "$IMAGE" ]] || IMAGE="pisbx-sandbox-min"
+      [[ -n "$IMAGE_FULL" ]] || IMAGE_FULL="pisbx-full-min" ;;
+    *)
+      die "unknown variant '$v' (standard, alpine, minimal, dev)" ;;
+  esac
+  IMAGE="${PISBX_IMAGE:-$IMAGE}"
+  IMAGE_FULL="${PISBX_IMAGE_FULL:-$IMAGE_FULL}"
 }
 
 # ---------- recovery ----------
@@ -965,12 +971,142 @@ cmd_doctor() {
   [[ "$bad" == 0 ]] && printf '  ok\n'
 }
 
+normalize_features() {
+  local raw="${1:-}" norm="," f out=""
+  raw="${raw// /}"
+  local IFS=','
+  for f in $raw; do
+    case "$f" in
+      "") : ;;
+      python|py|uv) norm+="python," ;;
+      node|js|javascript|typescript|ts) norm+="node," ;;
+      go|golang) norm+="go," ;;
+      rust|rs) norm+="rust," ;;
+      build|cc|cpp|gcc) norm+="build," ;;
+      cli|tools) norm+="cli," ;;
+      all|dev) norm+="python,node,go,rust,build,cli," ;;
+      none|minimal) : ;;
+      *) die "unknown feature '$f' (python, node, go, rust, build, cli, all)" ;;
+    esac
+  done
+  for f in python node go rust build cli; do
+    case "$norm" in *",$f,"*) out+="$f," ;; esac
+  done
+  printf '%s' "${out%,}"
+}
+
+tag_for_features() {
+  local feats="$1" t="dev"
+  [[ -z "$feats" ]] && { echo min; return; }
+  [[ "$feats" == "python,node,go,rust,build,cli" ]] && { echo dev; return; }
+  case ",$feats," in *",python,"*) t+="-py" ;; esac
+  case ",$feats," in *",node,"*) t+="-js" ;; esac
+  case ",$feats," in *",go,"*) t+="-go" ;; esac
+  case ",$feats," in *",rust,"*) t+="-rs" ;; esac
+  case ",$feats," in *",build,"*) t+="-cc" ;; esac
+  case ",$feats," in *",cli,"*) t+="-cli" ;; esac
+  echo "$t"
+}
+
+alpine_write_dockerfile() {
+  local feats="$1" sandbox="$2" out="$3"
+  local pkgs="bash ca-certificates curl git ripgrep fd libstdc++ jq less"
+  local desc="" post_cmds="" post_line="" daemon_env="" cmd="" agent_pkg agent_ver
+
+  case ",$feats," in *",python,"*) pkgs+=" python3 py3-pip"; desc+="python3, pip, uv; " ;; esac
+  case ",$feats," in *",node,"*)   pkgs+=" nodejs npm";        desc+="node, npm, pnpm, yarn, TypeScript, tsx; " ;; esac
+  case ",$feats," in *",go,"*)     pkgs+=" go gopls delve";    desc+="go, gopls, delve; " ;; esac
+  case ",$feats," in *",rust,"*)   pkgs+=" rust cargo rustfmt rust-clippy rust-analyzer"; desc+="rust, cargo, rustfmt, clippy, rust-analyzer; " ;; esac
+  case ",$feats," in *",build,"*)  pkgs+=" build-base";        desc+="gcc, g++, make; " ;; esac
+  case ",$feats," in *",cli,"*)    pkgs+=" bat eza sd dust procs bottom delta hyperfine tokei watchexec hexyl zoxide just"; desc+="rg, fd, bat, eza, sd, dust, procs, btm, delta, hyperfine, tokei, hexyl, zoxide, just; " ;; esac
+  desc="${desc%; }"
+
+  case ",$feats," in *",python,"*) post_cmds+="python3 -m pip install --break-system-packages --no-cache-dir uv" ;; esac
+  case ",$feats," in *",node,"*)
+    [[ -n "$post_cmds" ]] && post_cmds+=" && "
+    post_cmds+="npm install -g pnpm yarn typescript tsx && npm cache clean --force" ;;
+  esac
+  [[ -n "$post_cmds" ]] && post_line="RUN $post_cmds"
+
+  if [[ "$sandbox" == 1 ]]; then
+    agent_pkg="@fleetagent/pi-coding-agent"; agent_ver="0.2.15"
+    daemon_env='ENV HOME=/home/node \
+    NPM_CONFIG_PREFIX=/home/node/.npm-global \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    GOPATH=/home/node/go \
+    GOCACHE=/home/node/.cache/go-build \
+    CARGO_HOME=/home/node/.cargo \
+    PATH=/home/node/go/bin:/home/node/.cargo/bin:/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PI_DAEMON_HOST=0.0.0.0 \
+    PI_DAEMON_PORT=8787 \
+    PI_DAEMON_CWD=/workspace \
+    PI_DAEMON_TEMP_ROOT=/tmp \
+    TMPDIR=/tmp \
+    PI_DAEMON_ALLOW_INSECURE_TRANSPORT=1 \
+    PI_DAEMON_ALLOW_PROCESS_EXEC=1
+EXPOSE 8787'
+    cmd='CMD ["--daemon"]'
+  else
+    agent_pkg="@earendil-works/pi-coding-agent"; agent_ver="1.5.2"
+    daemon_env='ENV HOME=/home/node TERM=xterm-256color \
+    NPM_CONFIG_PREFIX=/home/node/.npm-global \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    GOPATH=/home/node/go \
+    GOCACHE=/home/node/.cache/go-build \
+    CARGO_HOME=/home/node/.cargo \
+    PATH=/home/node/go/bin:/home/node/.cargo/bin:/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+    cmd=''
+  fi
+
+  cat >"$out" <<DOCKER
+FROM oven/bun:1-alpine AS build
+RUN apk add --no-cache nodejs npm
+RUN npm install -g --ignore-scripts $agent_pkg@$agent_ver
+WORKDIR /usr/local/lib/node_modules/$agent_pkg
+RUN bun build --compile --minify ./dist/bun/cli.js --outfile /out/pi \\
+    || bun build --compile --minify ./dist/cli.js --outfile /out/pi
+RUN mkdir -p /out/dist \\
+    && (cp -R dist/core /out/dist/ 2>/dev/null || true) \\
+    && (cp -R dist/modes /out/dist/ 2>/dev/null || true) \\
+    && (cp "\$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \\
+    && cp package.json /out/
+FROM alpine:3.20
+RUN --mount=type=cache,target=/var/cache/apk \\
+    apk update && apk add $pkgs
+RUN adduser -D -u 1000 -h /home/node node
+RUN mkdir -p /home/node/.pi /home/node/.npm-global /home/node/go /home/node/.cache/go-build /home/node/.cargo && chown -R 1000:1000 /home/node
+$post_line
+RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'NOTE'
+# Sandbox environment
+
+- Alpine Linux. Use apk, not apt-get.
+- Preinstalled: $desc.
+- Prefer modern Rust CLI tools over busybox/GNU equivalents:
+  rg (grep), fd (find), bat (cat), sd (sed), eza (ls), dust (du), procs (ps),
+  btm (top), delta (diff), hyperfine (time), tokei (loc), hexyl (hex), zoxide.
+- Python commands are available only if python was included in the image.
+- Node/TS, Go and Rust commands are available only if those features were included.
+- The project is mounted at /workspace; it is the only host path you can reach.
+- You run as uid 1000; system packages need --root and: apk add --no-cache <pkg>
+NOTE
+COPY --from=build /out /opt/pi
+RUN ln -s /opt/pi/pi /usr/local/bin/pi
+$daemon_env
+WORKDIR /workspace
+USER node
+ENTRYPOINT ["pi"]
+$cmd
+DOCKER
+}
+
 cmd_bootstrap() {
-  local variant="standard"
+  local variant="standard" with_list=""
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --minimal|--alpine) variant="minimal"; shift ;;
-      --dev|--toolchain) variant="dev"; shift ;;
+      --with) variant="alpine"; with_list="$2"; shift 2 ;;
+      --minimal|--alpine) variant="alpine"; with_list="none"; shift ;;
+      --dev|--all) variant="alpine"; with_list="all"; shift ;;
       --standard) variant="standard"; shift ;;
       *) die "bootstrap: unknown option $1" ;;
     esac
@@ -979,197 +1115,36 @@ cmd_bootstrap() {
   mkdir -p "$DOCKER_DIR"
   local image_sandbox image_full df_sandbox df_full
 
-  if [[ "$variant" == minimal ]]; then
-    image_sandbox="pisbx-sandbox-min"
-    image_full="pisbx-full-min"
-    df_sandbox="$DOCKER_DIR/Dockerfile.sandbox.min"
-    df_full="$DOCKER_DIR/Dockerfile.min"
+  if [[ "$variant" == alpine ]]; then
+    local feats tag
+    feats="$(normalize_features "$with_list")"
+    tag="$(tag_for_features "$feats")"
+    image_sandbox="pisbx-sandbox-$tag"
+    image_full="pisbx-full-$tag"
+    df_sandbox="$DOCKER_DIR/Dockerfile.sandbox.$tag"
+    df_full="$DOCKER_DIR/Dockerfile.$tag"
 
-    cat >"$df_full" <<'DOCKER'
-FROM oven/bun:1-alpine AS build
-RUN apk add --no-cache nodejs npm
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2
-WORKDIR /usr/local/lib/node_modules/@earendil-works/pi-coding-agent
-RUN bun build --compile --minify ./dist/bun/cli.js --outfile /out/pi \
-    || bun build --compile --minify ./dist/cli.js --outfile /out/pi
-RUN mkdir -p /out/dist \
-    && (cp -R dist/core /out/dist/ 2>/dev/null || true) \
-    && (cp -R dist/modes /out/dist/ 2>/dev/null || true) \
-    && (cp "$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \
-    && cp package.json /out/
-FROM alpine:3.20
-RUN apk add --no-cache bash ca-certificates curl git ripgrep fd libstdc++
-RUN adduser -D -u 1000 -h /home/node node
-RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'EOF'
-# Sandbox environment
+    alpine_write_dockerfile "$feats" 0 "$df_full"
+    alpine_write_dockerfile "$feats" 1 "$df_sandbox"
 
-- Alpine Linux. Use apk, not apt-get.
-- Available: bash, busybox, git, ripgrep, fd, curl.
-- Not installed by default: python3, node/npm, gcc/make, jq.
-- The project is mounted at /workspace; it is the only host path you can reach.
-- You normally run as uid 1000. To install packages, run with --root and use:
-    apk add --no-cache <package>
-- Prefer solving the task with the tools already present.
-EOF
-COPY --from=build /out /opt/pi
-RUN ln -s /opt/pi/pi /usr/local/bin/pi
-ENV HOME=/home/node TERM=xterm-256color
-WORKDIR /workspace
-USER node
-ENTRYPOINT ["pi"]
-DOCKER
+    info "wrote $df_full and $df_sandbox"
+    info "features: ${feats:-none} (tag: $tag)"
+    docker_ok || die "docker required to build images"
+    info "building $image_full"
+    build_image "$image_full" "$df_full"
+    info "building $image_sandbox"
+    build_image "$image_sandbox" "$df_sandbox"
 
-    cat >"$df_sandbox" <<'DOCKER'
-FROM oven/bun:1-alpine AS build
-RUN apk add --no-cache nodejs npm
-RUN npm install -g --ignore-scripts @fleetagent/pi-coding-agent@0.2.15
-WORKDIR /usr/local/lib/node_modules/@fleetagent/pi-coding-agent
-RUN bun build --compile --minify ./dist/bun/cli.js --outfile /out/pi \
-    || bun build --compile --minify ./dist/cli.js --outfile /out/pi
-RUN mkdir -p /out/dist \
-    && (cp -R dist/core /out/dist/ 2>/dev/null || true) \
-    && (cp -R dist/modes /out/dist/ 2>/dev/null || true) \
-    && (cp "$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \
-    && cp package.json /out/
-FROM alpine:3.20
-RUN apk add --no-cache bash ca-certificates curl git ripgrep fd libstdc++
-RUN adduser -D -u 1000 -h /home/node node
-RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'EOF'
-# Sandbox environment
-
-- Alpine Linux. Use apk, not apt-get.
-- Available: bash, busybox, git, ripgrep, fd, curl.
-- Not installed by default: python3, node/npm, gcc/make, jq.
-- The project is mounted at /workspace; it is the only host path you can reach.
-- You normally run as uid 1000. To install packages, run with --root and use:
-    apk add --no-cache <package>
-- Prefer solving the task with the tools already present.
-EOF
-COPY --from=build /out /opt/pi
-RUN ln -s /opt/pi/pi /usr/local/bin/pi
-ENV HOME=/home/node \
-    PI_DAEMON_HOST=0.0.0.0 \
-    PI_DAEMON_PORT=8787 \
-    PI_DAEMON_CWD=/workspace \
-    PI_DAEMON_TEMP_ROOT=/tmp \
-    TMPDIR=/tmp \
-    PI_DAEMON_ALLOW_INSECURE_TRANSPORT=1 \
-    PI_DAEMON_ALLOW_PROCESS_EXEC=1
-EXPOSE 8787
-WORKDIR /workspace
-USER node
-ENTRYPOINT ["pi"]
-CMD ["--daemon"]
-DOCKER
-  elif [[ "$variant" == dev ]]; then
-    image_sandbox="pisbx-sandbox-dev"
-    image_full="pisbx-full-dev"
-    df_sandbox="$DOCKER_DIR/Dockerfile.sandbox.dev"
-    df_full="$DOCKER_DIR/Dockerfile.dev"
-
-    dev_note='RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'"'"'EOF'"'"'
-# Sandbox environment
-
-- Alpine Linux. Use apk, not apt-get.
-- Preinstalled runtimes: python3, pip, uv, node, npm, pnpm, yarn, typescript,
-  tsx, go (gopls, delve), rust (cargo, rustfmt, clippy, rust-analyzer),
-  gcc, g++, make.
-- Prefer modern Rust CLI tools over busybox/GNU equivalents:
-  rg (grep), fd (find), bat (cat), sd (sed), eza (ls), dust (du),
-  procs (ps), btm (top), delta (diff), hyperfine (time), tokei (loc),
-  hexyl (hex), zoxide.
-- Python: `python3`, `uv` for fast installs and venvs, or `pip install --user`.
-- Node/TS: `node`, `npm`, `pnpm`, `yarn`, `tsc`, `tsx`.
-- Go: `go`, `gopls`, `dlv`. Rust: `cargo`, `rustc`, `rustfmt`, `cargo clippy`,
-  `rust-analyzer`.
-- The project is mounted at /workspace; it is the only host path you can reach.
-- You run as uid 1000; system packages need --root and: apk add --no-cache <pkg>
-EOF'
-
-    cat >"$df_full" <<DOCKER
-FROM oven/bun:1-alpine AS build
-RUN apk add --no-cache nodejs npm
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2
-WORKDIR /usr/local/lib/node_modules/@earendil-works/pi-coding-agent
-RUN bun build --compile --minify ./dist/bun/cli.js --outfile /out/pi \\
-    || bun build --compile --minify ./dist/cli.js --outfile /out/pi
-RUN mkdir -p /out/dist \\
-    && (cp -R dist/core /out/dist/ 2>/dev/null || true) \\
-    && (cp -R dist/modes /out/dist/ 2>/dev/null || true) \\
-    && (cp "\$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \\
-    && cp package.json /out/
-FROM alpine:3.20
-RUN --mount=type=cache,target=/var/cache/apk \
-    apk update && apk add bash ca-certificates curl git ripgrep fd libstdc++ \
-      jq less python3 py3-pip nodejs npm build-base \
-      bat eza sd dust procs bottom delta hyperfine tokei watchexec hexyl zoxide just \
-      go gopls delve rust cargo rust-analyzer rustfmt rust-clippy
-RUN python3 -m pip install --break-system-packages --no-cache-dir uv \
-    && npm install -g pnpm yarn typescript tsx \
-    && npm cache clean --force
-RUN adduser -D -u 1000 -h /home/node node
-RUN mkdir -p /home/node/.pi /home/node/.npm-global /home/node/go /home/node/.cache/go-build /home/node/.cargo && chown -R 1000:1000 /home/node
-$dev_note
-COPY --from=build /out /opt/pi
-RUN ln -s /opt/pi/pi /usr/local/bin/pi
-ENV HOME=/home/node TERM=xterm-256color \\
-    NPM_CONFIG_PREFIX=/home/node/.npm-global \\
-    PIP_BREAK_SYSTEM_PACKAGES=1 \\
-    PATH=/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-WORKDIR /workspace
-USER node
-ENTRYPOINT ["pi"]
-DOCKER
-
-    cat >"$df_sandbox" <<DOCKER
-FROM oven/bun:1-alpine AS build
-RUN apk add --no-cache nodejs npm
-RUN npm install -g --ignore-scripts @fleetagent/pi-coding-agent@0.2.15
-WORKDIR /usr/local/lib/node_modules/@fleetagent/pi-coding-agent
-RUN bun build --compile --minify ./dist/bun/cli.js --outfile /out/pi \\
-    || bun build --compile --minify ./dist/cli.js --outfile /out/pi
-RUN mkdir -p /out/dist \\
-    && (cp -R dist/core /out/dist/ 2>/dev/null || true) \\
-    && (cp -R dist/modes /out/dist/ 2>/dev/null || true) \\
-    && (cp "\$(find / -name photon_rs_bg.wasm 2>/dev/null | head -1)" /out/dist/ 2>/dev/null || true) \\
-    && cp package.json /out/
-FROM alpine:3.20
-RUN --mount=type=cache,target=/var/cache/apk \
-    apk update && apk add bash ca-certificates curl git ripgrep fd libstdc++ \
-      jq less python3 py3-pip nodejs npm build-base \
-      bat eza sd dust procs bottom delta hyperfine tokei watchexec hexyl zoxide just \
-      go gopls delve rust cargo rust-analyzer rustfmt rust-clippy
-RUN python3 -m pip install --break-system-packages --no-cache-dir uv \
-    && npm install -g pnpm yarn typescript tsx \
-    && npm cache clean --force
-RUN adduser -D -u 1000 -h /home/node node
-RUN mkdir -p /home/node/.pi /home/node/.npm-global /home/node/go /home/node/.cache/go-build /home/node/.cargo && chown -R 1000:1000 /home/node
-$dev_note
-COPY --from=build /out /opt/pi
-RUN ln -s /opt/pi/pi /usr/local/bin/pi
-ENV HOME=/home/node \\
-    NPM_CONFIG_PREFIX=/home/node/.npm-global \\
-    PIP_BREAK_SYSTEM_PACKAGES=1 \\
-    PATH=/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \\
-    PI_DAEMON_HOST=0.0.0.0 \\
-    PI_DAEMON_PORT=8787 \\
-    PI_DAEMON_CWD=/workspace \\
-    PI_DAEMON_TEMP_ROOT=/tmp \\
-    TMPDIR=/tmp \\
-    PI_DAEMON_ALLOW_INSECURE_TRANSPORT=1 \\
-    PI_DAEMON_ALLOW_PROCESS_EXEC=1
-EXPOSE 8787
-WORKDIR /workspace
-USER node
-ENTRYPOINT ["pi"]
-CMD ["--daemon"]
-DOCKER
+    cfg_set_default variant alpine
+    cfg_set_default features "$feats"
+    cfg_set_default image "$image_sandbox"
+    cfg_set_default image_full "$image_full"
   else
     image_sandbox="pisbx-sandbox"
     image_full="pisbx-full"
     df_sandbox="$DOCKER_DIR/Dockerfile.sandbox"
     df_full="$DOCKER_DIR/Dockerfile"
-    # standard Dockerfiles are written below, unchanged
+
     cat >"$df_sandbox" <<'DOCKER'
 FROM node:22-bookworm-slim
 ARG PI_VERSION=0.2.15
@@ -1180,14 +1155,6 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 RUN npm install -g --ignore-scripts @fleetagent/pi-coding-agent@${PI_VERSION} \
     && npm cache clean --force
 RUN mkdir -p /workspace /home/node/.pi && chown -R 1000:1000 /workspace /home/node
-RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'EOF'
-# Sandbox environment
-
-- Debian bookworm. Use apt-get if you need packages.
-- Available: bash, git, ripgrep, fd, jq, curl, python3, make, g++, node/npm.
-- The project is mounted at /workspace; it is the only host path you can reach.
-- You normally run as uid 1000. System package installs require --root.
-EOF
 ENV HOME=/home/node PI_DAEMON_HOST=0.0.0.0 PI_DAEMON_PORT=8787 \
     PI_DAEMON_CWD=/workspace PI_DAEMON_TEMP_ROOT=/tmp TMPDIR=/tmp \
     PI_DAEMON_ALLOW_INSECURE_TRANSPORT=1 PI_DAEMON_ALLOW_PROCESS_EXEC=1
@@ -1207,32 +1174,28 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_VERSION} \
     && npm cache clean --force
 RUN mkdir -p /workspace /home/node/.pi && chown -R 1000:1000 /workspace /home/node
-RUN mkdir -p /home/node/.pi && cat >/home/node/.pi/AGENTS.md <<'EOF'
-# Sandbox environment
-
-- Debian bookworm. Use apt-get if you need packages.
-- Available: bash, git, ripgrep, fd, jq, curl, python3, make, g++, node/npm.
-- The project is mounted at /workspace; it is the only host path you can reach.
-- You normally run as uid 1000. System package installs require --root.
-EOF
 ENV HOME=/home/node TERM=xterm-256color
 WORKDIR /workspace
 USER 1000:1000
 ENTRYPOINT ["pi"]
 DOCKER
+    info "wrote $df_full and $df_sandbox (standard)"
+    docker_ok || die "docker required to build images"
+    info "building $image_full"
+    build_image "$image_full" "$df_full"
+    info "building $image_sandbox"
+    build_image "$image_sandbox" "$df_sandbox"
+
+    cfg_set_default variant standard
+    cfg_set_default features ""
+    cfg_set_default image "$image_sandbox"
+    cfg_set_default image_full "$image_full"
   fi
 
-  info "wrote $df_full and $df_sandbox ($variant)"
-
-  docker_ok || die "docker required to build images"
-  info "building $image_full"
-  build_image "$image_full" "$df_full"
-  info "building $image_sandbox"
-  build_image "$image_sandbox" "$df_sandbox"
-  cfg_set_default variant "$variant"
-  info "images ready: $image_sandbox, $image_full ($variant)"
+  info "images ready: $image_sandbox, $image_full"
   dim "sizes: $(docker image inspect "$image_sandbox" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}'), $(docker image inspect "$image_full" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}')"
 }
+
 
 resolve_key() {
   local provider="$1" variant
@@ -1942,13 +1905,21 @@ COMMANDS
       prompts), and auth.json entries. Writes pisbx.toml / pisbx.lock
       and builds .pisbx/env.
 
-  bootstrap [--minimal|--dev|--standard]
-      Write config/docker/Dockerfile{,.sandbox} and build both images.
-      Required once before the first run.
-      --minimal  Alpine + single binary, no toolchain (~155MB)
-      --dev      Alpine + single binary + python3/uv, node/npm/pnpm/yarn,
-                 typescript/tsx, go, rust, gcc/make, Rust CLI tools (~1.6GB)
-      --standard Debian + full toolchain (~730MB)
+  bootstrap [--with LIST | --minimal | --dev | --standard]
+      Build both images. Required once before the first run.
+
+      --with LIST   Alpine + single pi binary + selected toolchains.
+                    Features: python, node, go, rust, build, cli
+                    Aliases:  py, js, ts, rs, cc, tools, all
+                    Examples:
+                      --with python
+                      --with node,rust,build
+                      --with python,node,go,rust,build,cli
+      --minimal     synonym for --with none      (~155MB)
+      --dev         synonym for --with all       (~1.6GB)
+      --standard    Debian + full toolchain      (~730MB)
+
+      pi itself is always included.
 
   update [--check] [--no-bootstrap] [--force]
       Git pull the clone recorded at install time, refresh
