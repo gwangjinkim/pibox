@@ -16,7 +16,7 @@ next:
   pibox models --providers             # browse providers and models
 
   cd ~/code/my-project
-  pibox run --model provider/model     # numbered session picker
+  pibox run --pick-model               # choose provider/model + session
   pibox attach add ~/data:/data:ro     # extra host folders (/shared is live)
   pibox sync                           # rebuild the project environment
   pibox sessions list                  # list sessions

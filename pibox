@@ -30,7 +30,7 @@ if [[ -z "${PIBOX_CONFIG_DIR:-}" && -d "$HOME/.config/pisbx" && ! -d "$HOME/.con
   chmod 600 "$HOME/.config/pibox"/*.json 2>/dev/null || true
 fi
 
-PIBOX_VERSION="1.2.0"
+PIBOX_VERSION="1.2.1"
 CFG_DIR="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -1538,6 +1538,7 @@ cmd_run() {
   esac
   local runtime="" model="" mode="" force=0 dry=0
   local ws_mode="" session_mode="${PIBOX_SESSION_MODE:-ask}" NO_EXT=0 ROOT=0
+  local pick_model_flag=0
   CLI_ATTACH=()
   local -a passthru=()
   while [[ $# -gt 0 ]]; do
@@ -1551,12 +1552,18 @@ cmd_run() {
       --no-extensions) NO_EXT=1; shift ;;
       --root) ROOT=1; shift ;;
       --attach) CLI_ATTACH+=("$2"); shift 2 ;;
+      --pick-model|--pick) pick_model_flag=1; shift ;;
       --dry-run) dry=1; shift ;;
       *) passthru+=("$1"); shift ;;
     esac
   done
 
-  if [[ -z "$model" ]]; then
+  if [[ "$pick_model_flag" == 1 ]]; then
+    [[ -z "$model" ]] || die "use either --model or --pick-model, not both"
+    [[ -t 0 && -t 1 ]] || die "--pick-model needs a terminal; use --model in scripts"
+    model="$(pick_model)" || exit 1
+    [[ -n "$model" ]] || exit 1
+  elif [[ -z "$model" ]]; then
     if [[ -t 0 && -t 1 ]]; then
       model="$(pick_model)" || exit 1
       [[ -n "$model" ]] || exit 1
@@ -2234,6 +2241,8 @@ COMMANDS
                                  packages (not available in remote mode)
       --attach host[:target][:ro|rw]
                                  mount an extra host folder (repeatable)
+      --pick-model               choose provider and model interactively
+                                 (same as leaving out --model in a terminal)
       --session-mode ask|continue|new
                                  ask (default) shows a numbered session picker;
                                  continue passes -c; new starts fresh

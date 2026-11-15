@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1
+
+- **`pibox run --pick-model`:** choose provider and model interactively without
+  shell substitution. Conflicts with `--model`; requires a terminal.
+
 ## 1.2.0
 
 - **`pibox models [provider] [--providers]`:** list models from the local pi

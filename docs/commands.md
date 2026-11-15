@@ -153,6 +153,7 @@ Steps:
 | `--no-extensions` | off | pass `--no-extensions` to pi |
 | `--root` | off | run the container as root (container mode only) so tools can install packages |
 | `--attach host[:target][:ro\|rw]` | — | mount an extra host folder (repeatable) |
+| `--pick-model` | off | choose provider/model interactively |
 
 ### Mode selection
 

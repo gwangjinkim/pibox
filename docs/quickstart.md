@@ -227,7 +227,8 @@ pibox models opencode-go
 pibox pick                    # provider -> filter -> model
 ```
 
-`pibox run` without `--model` opens the picker in a terminal.
+`pibox run --pick-model` opens the picker; leaving out `--model` does the same in
+a terminal.
 
 ## 4. Run
 
