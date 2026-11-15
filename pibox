@@ -30,7 +30,7 @@ if [[ -z "${PIBOX_CONFIG_DIR:-}" && -d "$HOME/.config/pisbx" && ! -d "$HOME/.con
   chmod 600 "$HOME/.config/pibox"/*.json 2>/dev/null || true
 fi
 
-PIBOX_VERSION="1.2.1"
+PIBOX_VERSION="1.3.0"
 CFG_DIR="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -702,6 +702,50 @@ pick_model() {
   printf '%s/%s\n' "$p" "${opts[$((choice-1))]}"
 }
 
+
+# ---------- last model state ----------
+state_dir() {
+  local base p
+  base="${XDG_STATE_HOME:-$HOME/.local/state}/pibox/projects"
+  p="$(cd "$(project_root || echo "$PWD")" 2>/dev/null && pwd -P || printf '%s' "$PWD")"
+  p="${p#/}"; p="${p//\//-}"
+  printf '%s/%s' "$base" "$p"
+}
+
+state_last_model() {
+  local f; f="$(state_dir)/state.json"
+  [[ -f "$f" ]] && jq -r '.last_model // empty' "$f" 2>/dev/null || true
+}
+
+state_save_model() {
+  local dir f tmp
+  dir="$(state_dir)"; mkdir -p "$dir"; chmod 700 "$dir"
+  f="$dir/state.json"; tmp="$f.tmp.$$"
+  jq -n --arg m "$1" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{last_model:$m, last_used:$t}' >"$tmp"
+  chmod 600 "$tmp"; mv "$tmp" "$f"
+}
+
+cmd_list() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    providers)
+      case "${1:-}" in
+        --models|--with-models)
+          local p
+          while IFS= read -r p; do
+            printf '%s\n' "$p"
+            cmd_models "$p" | sed 's/^/  /'
+          done < <(models_tsv | cut -f1 | sort -u)
+          ;;
+        *) cmd_models --providers ;;
+      esac
+      ;;
+    models) cmd_models "${1:-}" ;;
+    *) die "list: use providers [--models] or models [provider]" ;;
+  esac
+}
+
 # ---------- recovery ----------
 our_containers() {
   { docker ps -a --filter 'label=pibox=1' --format '{{.ID}}\t{{.Names}}\t{{.Status}}' 2>/dev/null || true
@@ -884,7 +928,16 @@ cmd_sessions() {
       local -a extra=()
       while [[ $# -gt 0 ]]; do
         case "$1" in
-          --model) model="$2"; shift 2 ;;
+          --model)
+        if [[ -n "${2:-}" && "${2}" != -* ]]; then
+          model="$2"; shift 2
+        else
+          pick_model_flag=1; shift
+        fi ;;
+      --model=*)
+        model="${1#--model=}"
+        [[ -n "$model" ]] || pick_model_flag=1
+        shift ;;
           --) shift; extra=("$@"); break ;;
           *) want="$1"; shift ;;
         esac
@@ -1499,7 +1552,16 @@ cmd_launch() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --provider) provider="$2"; shift 2 ;;
-      --model) model="$2"; shift 2 ;;
+      --model)
+        if [[ -n "${2:-}" && "${2}" != -* ]]; then
+          model="$2"; shift 2
+        else
+          pick_model_flag=1; shift
+        fi ;;
+      --model=*)
+        model="${1#--model=}"
+        [[ -n "$model" ]] || pick_model_flag=1
+        shift ;;
       --native) native=1; shift ;;
       *) rest+=("$1"); shift ;;
     esac
@@ -1544,7 +1606,16 @@ cmd_run() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --runtime) runtime="$2"; shift 2 ;;
-      --model) model="$2"; shift 2 ;;
+      --model)
+        if [[ -n "${2:-}" && "${2}" != -* ]]; then
+          model="$2"; shift 2
+        else
+          pick_model_flag=1; shift
+        fi ;;
+      --model=*)
+        model="${1#--model=}"
+        [[ -n "$model" ]] || pick_model_flag=1
+        shift ;;
       --mode) mode="$2"; shift 2 ;;
       --force) force=1; shift ;;
       --session-mode) session_mode="$2"; shift 2 ;;
@@ -1558,19 +1629,24 @@ cmd_run() {
     esac
   done
 
+  if [[ "$pick_model_flag" == 1 && -n "$model" ]]; then
+    die "use either --model provider/model or --pick-model, not both"
+  fi
   if [[ "$pick_model_flag" == 1 ]]; then
-    [[ -z "$model" ]] || die "use either --model or --pick-model, not both"
     [[ -t 0 && -t 1 ]] || die "--pick-model needs a terminal; use --model in scripts"
     model="$(pick_model)" || exit 1
-    [[ -n "$model" ]] || exit 1
   elif [[ -z "$model" ]]; then
-    if [[ -t 0 && -t 1 ]]; then
+    model="$(state_last_model)"
+    if [[ -n "$model" ]]; then
+      info "using last model: $model"
+    elif [[ -t 0 && -t 1 ]]; then
       model="$(pick_model)" || exit 1
-      [[ -n "$model" ]] || exit 1
     else
-      die "--model provider/model is required (or use: pibox pick)"
+      die "--model is required in non-interactive runs (or use: pibox pick)"
     fi
   fi
+  [[ -n "$model" ]] || exit 1
+  [[ "$dry" == 1 ]] || state_save_model "$model"
   local provider="${model%%/*}"
   [[ "$provider" != "$model" ]] || die "use an explicit provider prefix, e.g. --model opencode-go/muse-spark-1.3-contributor"
 
@@ -2214,9 +2290,10 @@ COMMANDS
       Dependencies, keyring contents, permissions, and plaintext-key
       warnings. Exits non-zero when a security check fails.
 
+  list providers [--models]     providers only; --models adds their models
+  list models [provider]        provider/model pairs
   models [provider] [--providers]
-      List provider/model pairs from the local catalog.
-      --providers shows providers, model counts, and key status.
+      Older spelling of `pibox list`; same output.
 
   pick
       Interactive provider -> model picker; prints provider/model.
@@ -2225,11 +2302,15 @@ COMMANDS
       pibox models --providers     # providers, counts, key status
       pibox models opencode-go     # models for one provider
 
-  run [--model provider/model] [options] [-- pi args]
+  run [--model [provider/model]] [options] [-- pi args]
       Resolve the provider to its environment variable, fetch the secret
       from the keyring, pick a runtime, and launch pi.
-      Without --model in a terminal, a provider/model picker opens.
-      Non-interactive runs still need --model.
+
+      no --model at all       reuse the last model for this project;
+                              if none, a picker opens in a terminal
+      --model (no value)      provider/model picker
+      --model provider/model  use exactly that model
+      --pick-model            force the picker
 
       --runtime docker|lima      where tools execute (default: docker)
       --mode remote|container|native
@@ -2355,6 +2436,7 @@ main() {
     attach) cmd_attach "$@" ;;
     repair) cmd_repair "$@" ;;
     models) cmd_models "$@" ;;
+    list) cmd_list "$@" ;;
     pick) pick_model ;;
     recover) cmd_recover "$@" ;;
     clean) cmd_clean "$@" ;;

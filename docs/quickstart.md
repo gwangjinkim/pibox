@@ -219,16 +219,22 @@ pibox run --attach ~/data:/data:rw   # one-off
 in while a session runs. To apply a new mount to an existing conversation, stop
 and resume it; the picker keeps the history. See [safety.md](safety.md).
 
-## 3e. Browse models
+## 3e. Browse models and reuse choices
 
 ```bash
-pibox models --providers      # google / opencode / opencode-go, counts, key status
-pibox models opencode-go
-pibox pick                    # provider -> filter -> model
+pibox list providers            # providers, model counts, key status
+pibox list models opencode-go
+pibox list providers --models   # tree view
 ```
 
-`pibox run --pick-model` opens the picker; leaving out `--model` does the same in
-a terminal.
+Model selection:
+
+```bash
+pibox run                            # last model for this project, else picker
+pibox run --model                    # picker
+pibox run --model opencode-go/...    # explicit
+pibox pick                           # picker, prints provider/model
+```
 
 ## 4. Run
 

@@ -63,8 +63,9 @@ More: [Quick start](docs/quickstart.md) · [Command reference](docs/commands.md)
 |---|---|
 | choose toolchains for the image | `pibox bootstrap --with python,node` (`--minimal`, `--dev`, `--standard`) |
 | register keys once | `pibox init` |
-| browse providers and models | `pibox models --providers`, `pibox models opencode-go` |
-| pick a model interactively | `pibox run --pick-model` (or `pibox pick`) |
+| browse providers and models | `pibox list providers`, `pibox list models`, `pibox list providers --models` |
+| pick a model interactively | `pibox run --model` (no value), `pibox run --pick-model`, or `pibox pick` |
+| reuse the last model | `pibox run` (no `--model`) |
 | run and resume | `pibox run --model provider/model` (numbered session picker) |
 | list or export sessions | `pibox sessions list`, `pibox sessions export latest out.html` |
 | attach a host folder | `pibox attach add ~/data:/data:ro`; live drops via `~/.pibox/share` → `/shared` |

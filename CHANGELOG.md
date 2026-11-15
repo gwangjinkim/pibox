@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0
+
+- **`pibox run` reuses the last model** for the project when `--model` is omitted
+  (stored in `~/.local/state/pibox/projects/<path>/state.json`).
+- **`pibox run --model` with no value** opens the provider/model picker.
+- **`pibox list providers`**, **`pibox list models`**, and
+  **`pibox list providers --models`** (tree view). `--with-models` is accepted as
+  an alias.
+- `pibox models` remains as an older spelling.
+
 ## 1.2.1
 
 - **`pibox run --pick-model`:** choose provider and model interactively without

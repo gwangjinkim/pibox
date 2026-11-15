@@ -13,10 +13,10 @@ next:
   pibox bootstrap --with python,node   # pick toolchains (or --minimal)
   pibox init                           # register keys in the keyring
   pibox doctor                         # verify dependencies and keys
-  pibox models --providers             # browse providers and models
+  pibox list providers --models        # browse providers and their models
 
   cd ~/code/my-project
-  pibox run --pick-model               # choose provider/model + session
+  pibox run                            # last model, or picker + session
   pibox attach add ~/data:/data:ro     # extra host folders (/shared is live)
   pibox sync                           # rebuild the project environment
   pibox sessions list                  # list sessions
