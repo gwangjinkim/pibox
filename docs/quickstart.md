@@ -219,6 +219,16 @@ pibox run --attach ~/data:/data:rw   # one-off
 in while a session runs. To apply a new mount to an existing conversation, stop
 and resume it; the picker keeps the history. See [safety.md](safety.md).
 
+## 3e. Browse models
+
+```bash
+pibox models --providers      # google / opencode / opencode-go, counts, key status
+pibox models opencode-go
+pibox pick                    # provider -> filter -> model
+```
+
+`pibox run` without `--model` opens the picker in a terminal.
+
 ## 4. Run
 
 ```bash

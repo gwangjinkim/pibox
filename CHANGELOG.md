@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0
+
+- **`pibox models [provider] [--providers]`:** list models from the local pi
+  catalog, grouped by provider, with model counts and key status.
+- **`pibox pick`:** interactive provider -> filter -> model picker. Prints only
+  `provider/model` on stdout.
+- **`pibox run` without `--model`:** opens the picker in a terminal;
+  non-interactive runs still require `--model`.
+
 ## 1.1.0
 
 - **Host folder attachments:** `pibox attach add|list|remove` persists mounts in

@@ -13,6 +13,7 @@ next:
   pibox bootstrap --with python,node   # pick toolchains (or --minimal)
   pibox init                           # register keys in the keyring
   pibox doctor                         # verify dependencies and keys
+  pibox models --providers             # browse providers and models
 
   cd ~/code/my-project
   pibox run --model provider/model     # numbered session picker
