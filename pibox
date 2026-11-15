@@ -30,7 +30,7 @@ if [[ -z "${PIBOX_CONFIG_DIR:-}" && -d "$HOME/.config/pisbx" && ! -d "$HOME/.con
   chmod 600 "$HOME/.config/pibox"/*.json 2>/dev/null || true
 fi
 
-PIBOX_VERSION="1.1.0"
+PIBOX_VERSION="1.1.1"
 CFG_DIR="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -2123,8 +2123,10 @@ COMMANDS
       --attach host[:target][:ro|rw]
                                  mount an extra host folder (repeatable)
       --session-mode ask|continue|new
-                                 ask (default) prompts when the folder has
-                                 sessions; continue passes -c; new starts fresh
+                                 ask (default) shows a numbered session picker;
+                                 continue passes -c; new starts fresh
+      --workspace mount|git      mount = edit the live tree (default)
+                                 git = worktree snapshot + branch on exit
       --force                    allow mounting \$HOME or / as workspace
       --dry-run                  show the plan without starting anything
 
@@ -2166,7 +2168,7 @@ COMMANDS
       Diagnose leftover state after a crash: containers, temp agent dirs,
       git workspaces, incomplete environment. --fix applies safe cleanup.
 
-  clean [--containers] [--tmp] [--work] [--env] [--all]
+  clean [--containers] [--tmp] [--work] [--env] [--all] [--force]
       Targeted cleanup. Default removes stopped containers and stale temp
       dirs; running containers need --force.
 
@@ -2174,6 +2176,7 @@ COMMANDS
       list:   sessions for this folder with timestamp, size, id
       resume: pibox sessions resume <id|latest> [--model M] [-- pi args]
       export: pibox sessions export <id|latest> [out.html]
+      pibox run also shows a numbered picker for up to 9 sessions.
 
   run also accepts --workspace mount|git. git mode creates a worktree
   from a snapshot of your dirty tree, copies untracked non-ignored

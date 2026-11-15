@@ -7,6 +7,27 @@ bin_dir="${PIBOX_BIN_DIR:-$HOME/.local/bin}"
 target="$bin_dir/pibox"
 cfg_dir="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
 
+next_steps() {
+  cat <<'NEXT'
+next:
+  pibox bootstrap --with python,node   # pick toolchains (or --minimal)
+  pibox init                           # register keys in the keyring
+  pibox doctor                         # verify dependencies and keys
+
+  cd ~/code/my-project
+  pibox run --model provider/model     # numbered session picker
+  pibox attach add ~/data:/data:ro     # extra host folders (/shared is live)
+  pibox sync                           # rebuild the project environment
+  pibox sessions list                  # list sessions
+
+  pibox recover                        # read-only crash report
+  pibox repair                         # after a --root session
+
+  pibox update --check                 # later: check for updates
+docs: https://github.com/gwangjinkim/pibox/tree/main/docs
+NEXT
+}
+
 usage() {
   cat <<EOF
 usage: ./install.sh [--check] [--help]
@@ -281,16 +302,7 @@ if [ "${#MISSING[@]}" -eq 0 ]; then
   if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
     printf 'add this to your shell profile:\n  export PATH="%s:$PATH"\n\n' "$bin_dir"
   fi
-  printf 'next:\n'
-  printf '  pibox bootstrap          # build the sandbox images (required once)\n'
-  printf '  pibox init --dry-run     # see which providers would be registered\n'
-  printf '  pibox init               # register them in the OS keyring\n'
-  printf '  pibox doctor             # verify dependencies, keys, permissions\n\n'
-  printf '  cd ~/code/my-project\n'
-  printf '  pibox run --model provider/model\n\n'
-  printf '  pibox update --check     # later: check for a newer commit\n'
-  printf '  pibox update             # pull, reinstall, rebuild images\n\n'
-  printf 'docs: https://github.com/gwangjinkim/pibox/tree/main/docs\n'
+  next_steps
   exit 0
 fi
 
@@ -441,5 +453,5 @@ printf 'all prerequisites are installed.\n\n'
 if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
   printf 'add this to your shell profile:\n  export PATH="%s:$PATH"\n\n' "$bin_dir"
 fi
-printf 'next: pibox bootstrap && pibox init && pibox doctor\n'
+next_steps
 exit 0

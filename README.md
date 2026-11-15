@@ -57,6 +57,26 @@ More: [Quick start](docs/quickstart.md) · [Command reference](docs/commands.md)
 
 ---
 
+## What you can do
+
+| Want | Command |
+|---|---|
+| choose toolchains for the image | `pibox bootstrap --with python,node` (`--minimal`, `--dev`, `--standard`) |
+| register keys once | `pibox init` |
+| run and resume | `pibox run --model provider/model` (numbered session picker) |
+| list or export sessions | `pibox sessions list`, `pibox sessions export latest out.html` |
+| attach a host folder | `pibox attach add ~/data:/data:ro`; live drops via `~/.pibox/share` → `/shared` |
+| adopt the global pi setup | `pibox migrate` |
+| manage extensions | `pibox add`, `pibox remove`, `pibox sync` |
+| work in a git worktree | `pibox run --workspace git` |
+| install tools at runtime | `pibox run --mode container --root` (then `apk add`) |
+| recover after a crash | `pibox recover`, `pibox clean`, `pibox repair` |
+| install Debian/glibc | `pibox bootstrap --standard` |
+| update | `pibox update` |
+
+Details: [quickstart](docs/quickstart.md) · [commands](docs/commands.md) ·
+[combinations](docs/combinations.md) · [safety](docs/safety.md)
+
 ## Status
 
 `pibox` is a small, auditable launcher (one bash script). It is **not** a security
