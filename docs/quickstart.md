@@ -117,12 +117,27 @@ pibox init             # register missing providers
 **Manual** — one provider:
 
 ```bash
-skey set opencode-go app00
+skey set <provider> [label]    # e.g. skey set opencode-go app00
+```
+
+`<provider>` is the provider id (`opencode-go`, `anthropic`, `openai`, `google`,
+`deepseek`, …). `[label]` is optional and distinguishes multiple keys for the
+same provider:
+
+```bash
+skey set opencode-go app00     # work key
+skey set opencode-go prod      # second key
+skey set anthropic personal
 ```
 
 ```
 Enter secret for opencode-go/app00:
 ```
+
+Input is hidden and never echoes. Pibox maps the provider to the official
+environment variable (`opencode-go` → `OPENCODE_API_KEY`, `anthropic` →
+`ANTHROPIC_API_KEY`, …) and injects it at run time, so you never need to know or
+type variable names.
 
 See what is stored (names only):
 

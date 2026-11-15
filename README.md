@@ -30,8 +30,8 @@ pibox bootstrap
 
 # 3. put a credential in the OS keyring (hidden prompt)
 pibox init                     # import providers from ~/.pi/agent/auth.json
-# or directly:
-skey set opencode-go app00
+# or register one provider manually:
+skey set <provider> [label]    # e.g. skey set opencode-go app00
 
 # 4. run from the project you want the agent to see
 cd ~/code/my-project
@@ -40,6 +40,28 @@ pibox run --model opencode-go/muse-spark-1.3-contributor
 # 5. later, update the clone and rebuild the images
 pibox update
 ```
+
+### `skey set <provider> [label]`
+
+- `<provider>` is the provider id: `opencode-go`, `anthropic`, `openai`,
+  `google`, `deepseek`, `openrouter`, …
+- `[label]` is optional and distinguishes multiple keys from the same provider:
+
+  ```bash
+  skey set opencode-go app00     # work key
+  skey set opencode-go prod      # second key
+  skey set anthropic personal
+  ```
+
+- After Enter you paste the API key. Input is hidden, nothing is echoed.
+- Pibox knows the official environment variable for each provider
+  (`opencode-go` → `OPENCODE_API_KEY`, `anthropic` → `ANTHROPIC_API_KEY`, …) and
+  injects it for the run. You never look up or type variable names.
+- The secret stays in the OS keyring; `skey list` shows labels only.
+- `pibox doctor` checks what is registered.
+
+That provider → variable mapping is one of the main reasons pibox exists: it
+removes the mental overhead of "which key name does pi expect?".
 
 If the folder already has sessions, `pibox` asks whether to continue the last one
 or start fresh. Skip the prompt with `--session-mode continue` or `--session-mode new`.
