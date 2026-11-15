@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.0
+
+- **Host folder attachments:** `pibox attach add|list|remove` persists mounts in
+  `.pibox/attach`; `pibox run --attach host[:target][:ro|rw]` adds one for a
+  single run. Default target `/attached/<name>`, default read-only.
+- **`/shared`:** `~/.pibox/share` is always mounted read-write, so files can be
+  dropped into a running session without restarting it.
+- **`pibox repair`:** fixes `pibox-home` volume ownership after a `--root`
+  session; also runs automatically after root sessions.
+- **Fix:** container/lima sessions now mount at
+  `/home/node/.pi/agent/sessions` (previously the wrong path without a project
+  environment).
+- **`docs/safety.md`:** recovery boundaries, running containers, session
+  persistence, volume ownership, and attachments.
+
 ## 1.0.2
 
 - Session picker lists up to nine previous sessions with timestamp, size and id.

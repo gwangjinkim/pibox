@@ -152,6 +152,7 @@ Steps:
 | `--force` | off | allow mounting `$HOME` or `/` as the workspace |
 | `--no-extensions` | off | pass `--no-extensions` to pi |
 | `--root` | off | run the container as root (container mode only) so tools can install packages |
+| `--attach host[:target][:ro\|rw]` | — | mount an extra host folder (repeatable) |
 
 ### Mode selection
 
@@ -236,6 +237,7 @@ Diagnoses state left behind by a crash:
 `--fix` applies safe cleanup:
 
 - removes **stopped** containers; running ones are kept with a warning
+  (`pibox clean --force` is the only command that stops running containers)
 - removes stale temp dirs (overwrites `auth.json` before deleting)
 - removes clean worktrees (branches are never deleted)
 - rebuilds an incomplete environment

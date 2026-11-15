@@ -440,6 +440,7 @@ copying the script without a clone, set `PIBOX_REPO=/path/to/pibox`.
 | [docs/design.md](docs/design.md) | credential flow, split vs whole execution, threat model |
 | [docs/environment.md](docs/environment.md) | project environments, ownership rules, pnpm store, timings |
 | [docs/combinations.md](docs/combinations.md) | image features, measured sizes, and which combination to pick |
+| [docs/safety.md](docs/safety.md) | recovery, running sessions, volume ownership, host folder mounts |
 | [CHANGELOG.md](CHANGELOG.md) | what changed in each release |
 
 If you only read one page: run `pibox bootstrap` once, then `pibox run --model
@@ -586,6 +587,37 @@ mode = "git"
 ```
 
 See [docs/environment.md](docs/environment.md#git-workspace-mode).
+
+### Attaching host folders
+
+Docker cannot add a mount to a running container. Pibox gives you two ways that
+work:
+
+```bash
+pibox attach add ~/data:/data:ro    # persisted in .pibox/attach
+pibox run --model provider/model    # mounted on every run
+
+pibox run --attach ~/data:/data:rw  # one-off
+```
+
+Format: `host[:target][:ro|rw]`; default target `/attached/<name>`, default
+`ro`. Separately, `~/.pibox/share` is always mounted at `/shared` (read-write),
+so you can copy files there while a session is running.
+
+To apply a new mount to an existing conversation, stop it and resume it with the
+attachment; the session picker keeps the history.
+
+### Safety and recovery
+
+```bash
+pibox recover            # read-only inventory
+pibox recover --fix      # removes stopped containers, stale temp dirs, clean worktrees
+pibox repair             # fix volume ownership after a --root session
+```
+
+`recover --fix` never stops a running container. Only `pibox clean --force`
+does. Sessions persist on the host even if a container is killed; resume with
+the session picker. Details: [docs/safety.md](docs/safety.md).
 
 ### Sessions in an existing folder
 

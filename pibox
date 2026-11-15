@@ -30,7 +30,7 @@ if [[ -z "${PIBOX_CONFIG_DIR:-}" && -d "$HOME/.config/pisbx" && ! -d "$HOME/.con
   chmod 600 "$HOME/.config/pibox"/*.json 2>/dev/null || true
 fi
 
-PIBOX_VERSION="1.0.2"
+PIBOX_VERSION="1.1.0"
 CFG_DIR="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -451,6 +451,18 @@ on_exit() {
   finalize_git_workspace || true
 }
 
+repair_volume_owner() {
+  docker run --rm --user 0:0 -v pibox-home:/home/node/.pi alpine:3.20 \
+    chown -R 1000:1000 /home/node/.pi >/dev/null 2>&1 || true
+}
+
+cmd_repair() {
+  need_cmd docker docker || die "docker required"
+  info "repairing ownership of the pibox-home volume"
+  repair_volume_owner
+  info "done"
+}
+
 cmd_work() {
   local action="${1:-list}" root
   root="$(project_root || true)"; [[ -n "$root" ]] || root="$PWD"
@@ -483,6 +495,99 @@ cmd_work() {
   esac
 }
 
+
+# ---------- host folder attachments ----------
+CLI_ATTACH=()
+ATTACH_V=()
+
+normalize_attach() {
+  local spec="$1" host target mode rest
+  host="$spec"; target=""; mode=":ro"
+  case "$host" in
+    *:ro) mode=":ro"; host="${host%:ro}" ;;
+    *:rw) mode=":rw"; host="${host%:rw}" ;;
+  esac
+  if [[ "$host" == *:* ]]; then
+    target="${host#*:}"
+    host="${host%%:*}"
+    [[ -z "$target" ]] && target=""
+  fi
+  case "$host" in
+    "~") host="$HOME" ;;
+    "~/"*) host="$HOME/${host#\~/}" ;;
+  esac
+  if [[ "$host" != /* ]]; then
+    host="$(cd "$(dirname "$host")" 2>/dev/null && pwd -P)/$(basename "$host")"
+  else
+    host="$(cd "$(dirname "$host")" 2>/dev/null && pwd -P)/$(basename "$host")"
+  fi
+  [[ -e "$host" ]] || die "attach: not found: $host"
+  [[ -n "$target" ]] || target="/attached/$(basename "$host")"
+  [[ "$target" == /* ]] || die "attach: target must be absolute: $target"
+  printf '%s\t%s\t%s\n' "$host" "$target" "$mode"
+}
+
+collect_attach_args() {
+  ATTACH_V=()
+  local root file line host target mode
+  root="$(project_root || echo "$PWD")"
+  file="$root/.pibox/attach"
+  if [[ -f "$file" ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" && "$line" != \#* ]] || continue
+      IFS=$'\t' read -r host target mode <<<"$(normalize_attach "$line")"
+      ATTACH_V+=(-v "$host:$target$mode")
+      dim "attach $host -> $target$mode"
+    done <"$file"
+  fi
+  local spec
+  for spec in ${CLI_ATTACH[@]+"${CLI_ATTACH[@]}"}; do
+    IFS=$'\t' read -r host target mode <<<"$(normalize_attach "$spec")"
+    ATTACH_V+=(-v "$host:$target$mode")
+    dim "attach $host -> $target$mode"
+  done
+  local share="${PIBOX_SHARE_DIR:-$HOME/.pibox/share}"
+  mkdir -p "$share"
+  ATTACH_V+=(-v "$share:/shared")
+  dim "attach $share -> /shared (rw)"
+}
+
+cmd_attach() {
+  local action="${1:-list}" root file spec
+  root="$(project_root || echo "$PWD")"
+  file="$root/.pibox/attach"
+  case "$action" in
+    add)
+      shift
+      [[ -n "${1:-}" ]] || die "usage: pibox attach add <host[:target][:ro|rw]>"
+      spec="$1"
+      normalize_attach "$spec" >/dev/null
+      grep -qxF "$spec" "$file" 2>/dev/null && { info "already attached: $spec"; return 0; }
+      mkdir -p "$root/.pibox"
+      printf '%s\n' "$spec" >>"$file"
+      info "added to $file: $spec"
+      ;;
+    list)
+      [[ -f "$file" ]] || { info "no .pibox/attach in $root"; return 0; }
+      local target mode host
+      while IFS= read -r spec; do
+        [[ -n "$spec" ]] || continue
+        IFS=$'\t' read -r host target mode <<<"$(normalize_attach "$spec")"
+        printf '%s  ->  %s%s\n' "$host" "$target" "$mode"
+      done <"$file"
+      ;;
+    remove)
+      shift
+      [[ -n "${1:-}" ]] || die "usage: pibox attach remove <host-or-line>"
+      if [[ -f "$file" ]]; then
+        grep -vxF "$1" "$file" >"$file.tmp" || true
+        mv "$file.tmp" "$file"
+        info "removed $1"
+      fi
+      ;;
+    *) die "attach: use add|list|remove" ;;
+  esac
+}
 
 resolve_images() {
   local v="${PIBOX_VARIANT:-$(cfg_default variant)}"
@@ -1341,6 +1446,7 @@ cmd_run() {
   esac
   local runtime="" model="" mode="" force=0 dry=0
   local ws_mode="" session_mode="${PIBOX_SESSION_MODE:-ask}" NO_EXT=0 ROOT=0
+  CLI_ATTACH=()
   local -a passthru=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1352,6 +1458,7 @@ cmd_run() {
       --workspace) ws_mode="$2"; shift 2 ;;
       --no-extensions) NO_EXT=1; shift ;;
       --root) ROOT=1; shift ;;
+      --attach) CLI_ATTACH+=("$2"); shift 2 ;;
       --dry-run) dry=1; shift ;;
       *) passthru+=("$1"); shift ;;
     esac
@@ -1394,7 +1501,9 @@ cmd_run() {
 
   # Session choice immediately after the mode choice.
   if [[ "$dry" != 1 ]]; then
-    decide_session "$session_mode" ${passthru[@]+"${passthru[@]}"}
+    collect_attach_args
+
+  decide_session "$session_mode" ${passthru[@]+"${passthru[@]}"}
     case "$SESSION_CHOICE" in
       quit) exit 0 ;;
       continue) passthru=(-c ${passthru[@]+"${passthru[@]}"}); info "continuing the most recent session" ;;
@@ -1484,18 +1593,17 @@ cmd_run() {
     local -a rootargs=()
     [[ "$ROOT" == 1 ]] && rootargs=(--user 0:0 -e HOME=/home/node)
     local sbase sessions_target store
-    sbase="$(session_base)"; sessions_target="/home/node/.pi/sessions"
+    sbase="$(session_base)"; sessions_target="/home/node/.pi/agent/sessions"
     store="$(pnpm_store)"
     local -a envmount=()
     if [[ -n "${PIBOX_BASE_DIR:-}" ]]; then
       envmount=(-v "$PIBOX_BASE_DIR:/home/node/.pi/agent")
-      sessions_target="/home/node/.pi/agent/sessions"
     fi
     envmount+=(-v "$store:/home/node/.cache/pibox/pnpm-store")
     info "running pi inside a container in VM '$LIMA_NAME'"
     warn "note: VM mode passes the credential to the guest; prefer --runtime docker for tighter key isolation"
     limactl shell "$LIMA_NAME" -- docker run --rm ${tty[@]+"${tty[@]}"} ${rootargs[@]+"${rootargs[@]}"} ${envmount[@]+"${envmount[@]}"} \
-      -v "$(workspace_src):/workspace" -v "$sbase:$sessions_target" -v pibox-home:/home/node/.pi \
+      -v "$(workspace_src):/workspace" ${ATTACH_V[@]+"${ATTACH_V[@]}"} -v "$sbase:$sessions_target" -v pibox-home:/home/node/.pi \
       "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"}
     return $?
   fi
@@ -1516,6 +1624,7 @@ cmd_run() {
       --label pibox=1 --label "pibox.workspace=$(workspace_src)" \
       -e PI_DAEMON_TOKEN="$token" \
       -v "$(workspace_src):/workspace" \
+      ${ATTACH_V[@]+"${ATTACH_V[@]}"} \
       -p "127.0.0.1:$port:8787" \
       "$IMAGE" >/dev/null
 
@@ -1546,7 +1655,7 @@ cmd_run() {
   docker_ok || die "docker unavailable"
   ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile"
   local sbase sessions_target store; sbase="$(session_base)"; mkdir -p "$sbase"
-  sessions_target="/home/node/.pi/sessions"
+  sessions_target="/home/node/.pi/agent/sessions"
   store="$(pnpm_store)"; mkdir -p "$store"
   local -a envmount=()
   if [[ -n "${PIBOX_BASE_DIR:-}" ]]; then
@@ -1562,15 +1671,19 @@ cmd_run() {
     warn "running as root inside the container; tools can install packages"
   fi
   info "running the whole pi process in the container"
+  local rc=0
   skey run --no-redact "$provider" "$variant" --env "$envvar" -y -- \
     docker run --rm ${tty[@]+"${tty[@]}"} ${rootargs[@]+"${rootargs[@]}"} --label pibox=1 --init \
       --cap-drop=ALL --security-opt=no-new-privileges \
       -e "$envvar" \
       -v "$(workspace_src):/workspace" \
+      ${ATTACH_V[@]+"${ATTACH_V[@]}"} \
       ${envmount[@]+"${envmount[@]}"} \
       -v "$sbase:$sessions_target" \
       -v pibox-home:/home/node/.pi \
-      "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"}
+      "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"} || rc=$?
+  [[ "$ROOT" == 1 ]] && repair_volume_owner
+  return $rc
 }
 
 cmd_vm() {
@@ -2007,6 +2120,8 @@ COMMANDS
       --no-extensions            do not load extensions (quiet sandboxed runs)
       --root                     run the container as root so tools can install
                                  packages (not available in remote mode)
+      --attach host[:target][:ro|rw]
+                                 mount an extra host folder (repeatable)
       --session-mode ask|continue|new
                                  ask (default) prompts when the folder has
                                  sessions; continue passes -c; new starts fresh
@@ -2034,6 +2149,18 @@ COMMANDS
 
   work list|clean
       List or remove git workspaces under .pibox/work/.
+
+  repair
+      Fix ownership of the pibox-home volume after a --root session.
+
+  attach add|list|remove
+      Persist extra host folder mounts in ./.pibox/attach (machine-local).
+      Format: host[:target][:ro|rw]   (default target /attached/<name>, ro)
+      Also always mounts ~/.pibox/share at /shared (rw) for live file drops.
+
+      pibox run also accepts --attach host[:target][:ro|rw] (repeatable).
+      Docker cannot add a mount to a running container: use /shared, or
+      stop and resume the session with the new attachment.
 
   recover [--fix]
       Diagnose leftover state after a crash: containers, temp agent dirs,
@@ -2101,6 +2228,8 @@ main() {
     run) cmd_run "$@" ;;
     vm) cmd_vm "$@" ;;
     work) cmd_work "$@" ;;
+    attach) cmd_attach "$@" ;;
+    repair) cmd_repair "$@" ;;
     recover) cmd_recover "$@" ;;
     clean) cmd_clean "$@" ;;
     sessions) cmd_sessions "$@" ;;

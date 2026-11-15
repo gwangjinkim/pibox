@@ -204,6 +204,21 @@ Nothing is installed as root by default. For extra system packages in
 pibox run --mode container --root --model provider/model   # then: apk add ...
 ```
 
+## 3d. Attach host folders
+
+Docker cannot add a mount to a running container.
+
+```bash
+pibox attach add ~/data:/data:ro     # persisted in .pibox/attach
+pibox run --model provider/model
+
+pibox run --attach ~/data:/data:rw   # one-off
+```
+
+`~/.pibox/share` is always mounted at `/shared` (read-write) for files you drop
+in while a session runs. To apply a new mount to an existing conversation, stop
+and resume it; the picker keeps the history. See [safety.md](safety.md).
+
 ## 4. Run
 
 ```bash
