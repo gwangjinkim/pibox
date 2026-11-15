@@ -1,0 +1,47 @@
+[
+  {
+    "kind": "docs",
+    "docRef": "ctx7:docs:392de1b461f305d97b0a705a",
+    "objectKey": "42a2f505658d1945cf1e384b",
+    "libraryId": "/anomalyco/opencode",
+    "libraryName": "/anomalyco/opencode",
+    "normalizedLibraryName": "unknown-library",
+    "query": "OpenCode Zen free models model IDs list",
+    "effectiveQuery": "OpenCode Zen free models model IDs list",
+    "page": 1,
+    "createdAt": "2026-11-01T18:36:57.230Z",
+    "expiresAt": "2026-11-02T18:36:57.230Z",
+    "rawLength": 5144,
+    "curatedLength": 3697
+  },
+  {
+    "kind": "docs",
+    "docRef": "ctx7:docs:e7df882c030c292231ab7899",
+    "objectKey": "29d852f60080006fd60f6bc8",
+    "libraryId": "/anomalyco/opencode",
+    "libraryName": "/anomalyco/opencode",
+    "normalizedLibraryName": "unknown-library",
+    "query": "OpenCode Zen models API endpoint free models",
+    "effectiveQuery": "OpenCode Zen models API endpoint free models",
+    "page": 1,
+    "createdAt": "2026-11-01T18:36:46.171Z",
+    "expiresAt": "2026-11-02T18:36:46.171Z",
+    "rawLength": 6122,
+    "curatedLength": 3427
+  },
+  {
+    "kind": "docs",
+    "docRef": "ctx7:docs:12c958d844162dbdbd30ff70",
+    "objectKey": "b69c96eb942909dda2f25f0e",
+    "libraryId": "/anomalyco/opencode",
+    "libraryName": "OpenCode",
+    "normalizedLibraryName": "opencode",
+    "query": "overview",
+    "effectiveQuery": "overview",
+    "page": 1,
+    "createdAt": "2026-11-01T18:36:34.534Z",
+    "expiresAt": "2026-11-02T18:36:34.534Z",
+    "rawLength": 4411,
+    "curatedLength": 257
+  }
+]

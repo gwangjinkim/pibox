@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.2
+
+- Session picker lists up to nine previous sessions with timestamp, size and id.
+  `[Enter]` resumes the latest, `1-9` resumes a specific session by id, `n` starts
+  fresh, `q` quits.
+- The session picker now appears immediately after the mode/extension preflight,
+  before migration.
+- Fixed a crash in the picker caused by splitting the mtime/path list incorrectly.
+
 ## 1.0.1
 
 - **Fix preflight option 1:** choosing "migrate this project, then continue in

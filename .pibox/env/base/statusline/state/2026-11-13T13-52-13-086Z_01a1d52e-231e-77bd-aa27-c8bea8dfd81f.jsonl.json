@@ -1,0 +1,12 @@
+{
+  "sessionFile": "/Users/josephus/.pi/agent/sessions/--Users-josephus-projects-pi-agent-rucl--/2026-11-13T13-52-13-086Z_01a1d52e-231e-77bd-aa27-c8bea8dfd81f.jsonl",
+  "totalDecodeMs": 13565691,
+  "totalMeasuredOutput": 1635595,
+  "totalTtftMs": 9787723,
+  "ttftCount": 1968,
+  "last": {
+    "rate": 120.15813755088242,
+    "exact": false,
+    "ttftMs": 3840
+  }
+}

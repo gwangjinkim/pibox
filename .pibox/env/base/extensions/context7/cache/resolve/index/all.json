@@ -1,0 +1,13 @@
+[
+  {
+    "kind": "resolve",
+    "cacheKey": "opencode::opencode",
+    "objectKey": "fa8b96e005c9758b9e6184cf",
+    "libraryName": "opencode",
+    "normalizedLibraryName": "opencode",
+    "query": "opencode",
+    "createdAt": "2026-11-01T18:36:33.488Z",
+    "expiresAt": "2026-11-08T18:36:33.488Z",
+    "resultCount": 5
+  }
+]

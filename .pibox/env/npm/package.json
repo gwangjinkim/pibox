@@ -1,0 +1,1 @@
+{"name":"pibox-env","private":true,"dependencies":{"@dreki-gg/pi-context7":"0.2.0","better-custom-provider":"2.0.1","pi-llama-cpp":"0.21.0","@xamfoo/pi-openrouter-pin":"0.1.6","@fleetagent/pi-coding-agent":"0.2.15","pi-effort":"0.1.1","pi-deepseek-v4-anchor":"1.1.0","@reedchan/statusline":"1.11.3"}}

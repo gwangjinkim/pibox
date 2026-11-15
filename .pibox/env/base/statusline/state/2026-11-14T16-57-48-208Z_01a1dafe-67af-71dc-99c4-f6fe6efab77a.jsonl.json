@@ -1,0 +1,12 @@
+{
+  "sessionFile": "/var/folders/wf/f1yws4hx18dd2z9mvgy6x7p40000gn/T/pisbx.ostq24/sessions/--private-tmp-pisbx-demo--/2026-11-14T16-57-48-208Z_01a1dafe-67af-71dc-99c4-f6fe6efab77a.jsonl",
+  "totalDecodeMs": 0,
+  "totalMeasuredOutput": 0,
+  "totalTtftMs": 0,
+  "ttftCount": 0,
+  "last": {
+    "rate": null,
+    "exact": false,
+    "ttftMs": 1199
+  }
+}

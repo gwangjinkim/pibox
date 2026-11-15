@@ -181,11 +181,16 @@ load errors.
         └── provider → OPENCODE_API_KEY → keyring variant
 ```
 
-If the folder has sessions and you did not pass a session flag, `pibox` asks:
+If the folder has sessions and you did not pass a session flag, `pibox` lists the
+latest up to nine and asks:
 
 ```
-[Enter] continue last   [n] new session   [q] quit
+  [1] 2026-11-14 08:11   11K  01a1db17-14d8
+  [2] 2026-11-14 08:02   9.8K 01a1d91c-f0da
+  [Enter] latest   [1-2] choose   [n] new   [q] quit
 ```
+
+A number resumes that session with `--session <id>`; Enter continues the latest.
 
 `--session-mode` skips the prompt:
 

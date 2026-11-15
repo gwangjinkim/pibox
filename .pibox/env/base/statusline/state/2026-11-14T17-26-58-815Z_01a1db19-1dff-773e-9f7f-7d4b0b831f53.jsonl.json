@@ -1,0 +1,12 @@
+{
+  "sessionFile": "/var/folders/wf/f1yws4hx18dd2z9mvgy6x7p40000gn/T/pisbx.AnxqfF/sessions/--private-tmp-migtest--/2026-11-14T17-26-58-815Z_01a1db19-1dff-773e-9f7f-7d4b0b831f53.jsonl",
+  "totalDecodeMs": 0,
+  "totalMeasuredOutput": 0,
+  "totalTtftMs": 0,
+  "ttftCount": 0,
+  "last": {
+    "rate": null,
+    "exact": false,
+    "ttftMs": 1143
+  }
+}

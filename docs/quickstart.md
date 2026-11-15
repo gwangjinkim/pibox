@@ -255,13 +255,15 @@ already has sessions, the first run asks:
 
 ```
 > found 2 previous session(s) for this folder
-  latest: 2026-11-14 08:11  (11K)  2026-11-14T08-11-54-970Z_....jsonl
-  [Enter] continue last   [n] new session   [q] quit:
+  [1] 2026-11-14 08:11   11K  01a1db17-14d8
+  [2] 2026-11-14 08:02   9.8K 01a1d91c-f0da
+  [Enter] latest   [1-2] choose   [n] new   [q] quit:
 ```
 
 | Choice | Result |
 |---|---|
-| Enter | continues the most recent (`pi -c`) |
+| Enter | continues the most recent |
+| `1`-`9` | resumes that specific session by id |
 | `n` | starts a new session |
 | `q` | exits without starting anything |
 

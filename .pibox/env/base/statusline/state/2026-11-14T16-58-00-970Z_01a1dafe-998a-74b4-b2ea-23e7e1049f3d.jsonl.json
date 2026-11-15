@@ -1,0 +1,12 @@
+{
+  "sessionFile": "/var/folders/wf/f1yws4hx18dd2z9mvgy6x7p40000gn/T/pisbx.qMxjUg/sessions/--private-tmp-pisbx-demo--/2026-11-14T16-58-00-970Z_01a1dafe-998a-74b4-b2ea-23e7e1049f3d.jsonl",
+  "totalDecodeMs": 3436,
+  "totalMeasuredOutput": 780,
+  "totalTtftMs": 4442,
+  "ttftCount": 2,
+  "last": {
+    "rate": 42.82081554808828,
+    "exact": false,
+    "ttftMs": 2443
+  }
+}

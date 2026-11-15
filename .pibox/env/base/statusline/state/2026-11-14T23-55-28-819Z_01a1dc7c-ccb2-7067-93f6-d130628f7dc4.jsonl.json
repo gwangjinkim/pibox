@@ -1,0 +1,12 @@
+{
+  "sessionFile": "/home/node/.pi/agent/sessions/--workspace--/2026-11-14T23-55-28-819Z_01a1dc7c-ccb2-7067-93f6-d130628f7dc4.jsonl",
+  "totalDecodeMs": 10414,
+  "totalMeasuredOutput": 2133,
+  "totalTtftMs": 11945,
+  "ttftCount": 4,
+  "last": {
+    "rate": 247.77421728251355,
+    "exact": false,
+    "ttftMs": 3644
+  }
+}

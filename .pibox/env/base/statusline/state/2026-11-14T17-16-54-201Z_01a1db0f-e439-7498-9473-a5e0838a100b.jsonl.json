@@ -1,0 +1,12 @@
+{
+  "sessionFile": "/tmp/pml4/agent/sessions/--private-tmp-pmb3--/2026-11-14T17-16-54-201Z_01a1db0f-e439-7498-9473-a5e0838a100b.jsonl",
+  "totalDecodeMs": 0,
+  "totalMeasuredOutput": 0,
+  "totalTtftMs": 0,
+  "ttftCount": 0,
+  "last": {
+    "rate": null,
+    "exact": false,
+    "ttftMs": 657
+  }
+}

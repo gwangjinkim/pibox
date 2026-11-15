@@ -1,0 +1,12 @@
+{
+  "sessionFile": "/var/folders/wf/f1yws4hx18dd2z9mvgy6x7p40000gn/T/pisbx.Invani/sessions/--private-tmp-gittest-.pisbx-work-20261114-183939-4161--/2026-11-14T17-39-39-665Z_01a1db24-ba11-75ff-83de-0e5c06f4da9a.jsonl",
+  "totalDecodeMs": 0,
+  "totalMeasuredOutput": 0,
+  "totalTtftMs": 0,
+  "ttftCount": 0,
+  "last": {
+    "rate": null,
+    "exact": false,
+    "ttftMs": 768
+  }
+}

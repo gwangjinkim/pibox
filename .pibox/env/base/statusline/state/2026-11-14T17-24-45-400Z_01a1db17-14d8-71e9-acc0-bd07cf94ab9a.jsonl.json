@@ -1,0 +1,12 @@
+{
+  "sessionFile": "/var/folders/wf/f1yws4hx18dd2z9mvgy6x7p40000gn/T/pisbx.sAU13Y/sessions/--private-tmp-uvbench--/2026-11-14T17-24-45-400Z_01a1db17-14d8-71e9-acc0-bd07cf94ab9a.jsonl",
+  "totalDecodeMs": 263,
+  "totalMeasuredOutput": 182,
+  "totalTtftMs": 1604,
+  "ttftCount": 1,
+  "last": {
+    "rate": null,
+    "exact": false,
+    "ttftMs": 802
+  }
+}

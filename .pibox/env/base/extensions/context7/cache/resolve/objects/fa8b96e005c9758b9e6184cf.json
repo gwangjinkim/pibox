@@ -1,0 +1,92 @@
+{
+  "kind": "resolve",
+  "cacheKey": "opencode::opencode",
+  "objectKey": "fa8b96e005c9758b9e6184cf",
+  "libraryName": "opencode",
+  "normalizedLibraryName": "opencode",
+  "query": "opencode",
+  "createdAt": "2026-11-01T18:36:33.488Z",
+  "expiresAt": "2026-11-08T18:36:33.488Z",
+  "results": [
+    {
+      "id": "/anomalyco/opencode",
+      "title": "OpenCode",
+      "description": "OpenCode is an open-source, provider-agnostic AI coding agent that offers LSP support, focuses on a terminal user interface (TUI), and utilizes a client/server architecture for flexible development.",
+      "branch": "dev",
+      "lastUpdateDate": "2026-11-01T02:44:06.152Z",
+      "state": "finalized",
+      "totalTokens": 1953651,
+      "totalSnippets": 11772,
+      "stars": 45875,
+      "trustScore": 9.8,
+      "benchmarkScore": 72.11,
+      "versions": [
+        "vscode-v0.0.12",
+        "__branch__adapter-rename",
+        "v2.0.32",
+        "v2.1.2",
+        "v1.18.29",
+        "v2.0.30",
+        "v2.0.24"
+      ]
+    },
+    {
+      "id": "/websites/opencode_ai",
+      "title": "Opencode",
+      "description": "Opencode is an AI coding agent designed for the terminal, assisting developers in understanding, building, and modifying codebases.",
+      "branch": "_contextdev_",
+      "lastUpdateDate": "2026-11-01T15:12:50.016Z",
+      "state": "finalized",
+      "totalTokens": 103595,
+      "totalSnippets": 1449,
+      "stars": -1,
+      "trustScore": 8.4,
+      "benchmarkScore": 70.87,
+      "versions": [
+        "v2"
+      ]
+    },
+    {
+      "id": "/anomalyco/opencode-sdk-js",
+      "title": "Opencode SDK",
+      "description": "Official TypeScript library providing convenient access to the Opencode REST API with support for streaming responses, comprehensive error handling, and automatic retries.",
+      "branch": "main",
+      "lastUpdateDate": "2026-10-29T19:13:43.425Z",
+      "state": "finalized",
+      "totalTokens": 116368,
+      "totalSnippets": 643,
+      "stars": 70,
+      "trustScore": 9.8,
+      "benchmarkScore": 68.45,
+      "versions": []
+    },
+    {
+      "id": "/websites/deepwiki_anomalyco_opencode",
+      "title": "OpenCode (DeepWiki)",
+      "description": "OpenCode is an open-source AI coding agent and developer platform that provides provider-agnostic AI assistance across terminal, desktop, and IDE interfaces.",
+      "branch": "main",
+      "lastUpdateDate": "2026-09-19T06:15:25.663Z",
+      "state": "finalized",
+      "totalTokens": 111520,
+      "totalSnippets": 822,
+      "stars": -1,
+      "trustScore": 9.1,
+      "benchmarkScore": 31,
+      "versions": []
+    },
+    {
+      "id": "/websites/rs_opencode_rs",
+      "title": "OpenCode RS",
+      "description": "OpenCode RS is a Rust SDK providing a native interface to OpenCode's HTTP REST API and SSE streaming capabilities for hybrid client-server applications.",
+      "branch": "main",
+      "lastUpdateDate": "2026-04-26T16:35:36.360Z",
+      "state": "finalized",
+      "totalTokens": 313780,
+      "totalSnippets": 2626,
+      "stars": -1,
+      "trustScore": 9.1,
+      "benchmarkScore": 57.13,
+      "versions": []
+    }
+  ]
+}

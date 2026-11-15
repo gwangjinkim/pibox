@@ -1,0 +1,12 @@
+{
+  "sessionFile": "/Users/josephus/.pi/agent/sessions/--Users-josephus-projects-pi-agent-decision-model--/2026-11-10T00-03-24-377Z_01a1c2c4-4259-728b-afaf-a7551eee2662.jsonl",
+  "totalDecodeMs": 2159812,
+  "totalMeasuredOutput": 173015,
+  "totalTtftMs": 209250,
+  "ttftCount": 50,
+  "last": {
+    "rate": 134.47355397142252,
+    "exact": false,
+    "ttftMs": 1632
+  }
+}

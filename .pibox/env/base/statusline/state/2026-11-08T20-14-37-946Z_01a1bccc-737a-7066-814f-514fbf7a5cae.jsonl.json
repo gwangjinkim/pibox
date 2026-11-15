@@ -1,0 +1,12 @@
+{
+  "sessionFile": "/Users/josephus/.pi/agent/sessions/--Users-josephus-projects-pi-agent-secure-pi--/2026-11-08T20-14-37-946Z_01a1bccc-737a-7066-814f-514fbf7a5cae.jsonl",
+  "totalDecodeMs": 9595,
+  "totalMeasuredOutput": 7189,
+  "totalTtftMs": 8883,
+  "ttftCount": 8,
+  "last": {
+    "rate": 744.5436308751073,
+    "exact": false,
+    "ttftMs": 1151
+  }
+}

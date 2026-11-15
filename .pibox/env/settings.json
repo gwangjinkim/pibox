@@ -1,0 +1,29 @@
+{
+  "theme": "dark",
+  "defaultProjectTrust": "ask",
+  "defaultProvider": "opencode-go",
+  "defaultModel": "muse-spark-1.3-contributor",
+  "defaultThinkingLevel": "high",
+  "lastChangelogVersion": "1.5.2",
+  "extensionChangelogVersions": {
+    "{\"source\":\"npm:@dreki-gg/pi-context7\",\"scope\":\"user\"}": "0.2.0",
+    "{\"source\":\"npm:pi-effort\",\"scope\":\"user\"}": "0.1.1",
+    "{\"source\":\"npm:@dreki-gg/pi-context7@0.2.0\",\"scope\":\"user\"}": "0.2.0",
+    "{\"source\":\"npm:pi-effort@0.1.1\",\"scope\":\"user\"}": "0.1.1"
+  },
+  "packages": [
+    "npm:@dreki-gg/pi-context7@0.2.0",
+    "npm:better-custom-provider@2.0.1",
+    "npm:pi-llama-cpp@0.21.0",
+    "npm:@xamfoo/pi-openrouter-pin@0.1.6",
+    "npm:@fleetagent/pi-coding-agent@0.2.15",
+    "npm:pi-effort@0.1.1",
+    "npm:pi-deepseek-v4-anchor@1.1.0",
+    "npm:@reedchan/statusline@1.11.3"
+  ],
+  "pi-effort": {
+    "modelEffort": {
+      "opencode-go/muse-spark-1.3-contributor": "high"
+    }
+  }
+}

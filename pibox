@@ -30,7 +30,7 @@ if [[ -z "${PIBOX_CONFIG_DIR:-}" && -d "$HOME/.config/pisbx" && ! -d "$HOME/.con
   chmod 600 "$HOME/.config/pibox"/*.json 2>/dev/null || true
 fi
 
-PIBOX_VERSION="1.0.1"
+PIBOX_VERSION="1.0.2"
 CFG_DIR="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -295,8 +295,17 @@ has_session_flag() {
   return 1
 }
 # Sets SESSION_CHOICE to continue | new | quit.
+session_list_by_mtime() {
+  session_files | while IFS= read -r f; do
+    printf '%s\t%s\n' "$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null || echo 0)" "$f"
+  done | sort -rn
+}
+
+SESSION_FILE=""; SESSION_ID=""
+
 decide_session() {
   SESSION_CHOICE="${1:-ask}"
+  SESSION_FILE=""; SESSION_ID=""
   [[ "$SESSION_CHOICE" == ask ]] || return 0
   if has_session_flag "${@:2}"; then
     SESSION_CHOICE=explicit
@@ -311,22 +320,45 @@ decide_session() {
     SESSION_CHOICE=new
     return 0
   fi
-  local latest name when size
-  latest="$(latest_session)"
-  name="$(basename "${latest:-session}")"
-  when="$(printf '%s' "$name" | cut -c1-16 | tr 'T' ' ')"
-  size="$(du -h "${latest:-/dev/null}" 2>/dev/null | cut -f1)"
+
+  local -a opts=()
+  local f
+  local mtime
+  while IFS=$'\t' read -r mtime f; do [[ -n "$f" ]] && opts+=("$f"); done < <(session_list_by_mtime | head -n 9)
+  local count="${#opts[@]}"
+  if (( count == 0 )); then SESSION_CHOICE=new; return 0; fi
+
   printf '\n' >&2
   info "found $n previous session(s) for this folder"
-  dim "latest: $when  ($size)  $name"
-  printf '  [Enter] continue last   [n] new session   [q] quit: ' >&2
+  local i ts size id
+  for ((i=0; i<count; i++)); do
+    f="${opts[$i]}"
+    ts="$(basename "$f" | cut -c1-19 | tr 'T' ' ' | sed -E 's/^([0-9]{4}-[0-9]{2}-[0-9]{2}) ([0-9]{2})-([0-9]{2})-([0-9]{2})$/\1 \2:\3:\4/')"
+    size="$(du -h "$f" 2>/dev/null | cut -f1)"
+    id="$(session_id_from_path "$f")"
+    printf '  [%d] %s  %6s  %s\n' "$((i+1))" "$ts" "$size" "${id:0:13}" >&2
+  done
+  [[ "$n" -gt "$count" ]] && dim "showing the latest $count of $n (pibox sessions list)" >&2
+
+  printf '  [Enter] latest   [1-%d] choose   [n] new   [q] quit: ' "$count" >&2
   local reply
-  read -r reply || reply=""
-  case "$reply" in
-    q|Q) SESSION_CHOICE=quit ;;
-    n|N|new) SESSION_CHOICE=new ;;
-    *) SESSION_CHOICE=continue ;;
-  esac
+  while :; do
+    read -r reply || reply=""
+    case "$reply" in
+      "") SESSION_CHOICE=continue; SESSION_FILE="${opts[0]}"; SESSION_ID="$(session_id_from_path "$SESSION_FILE")"; return 0 ;;
+      q|Q) SESSION_CHOICE=quit; return 0 ;;
+      n|N|new) SESSION_CHOICE=new; return 0 ;;
+      *[!0-9]*) printf '  enter 1-%d, n, or q: ' "$count" >&2 ;;
+      *)
+        if (( reply >= 1 && reply <= count )); then
+          SESSION_CHOICE=session
+          SESSION_FILE="${opts[$((reply-1))]}"
+          SESSION_ID="$(session_id_from_path "$SESSION_FILE")"
+          return 0
+        fi
+        printf '  enter 1-%d, n, or q: ' "$count" >&2 ;;
+    esac
+  done
 }
 
 
@@ -707,7 +739,7 @@ preflight_remote() {
   warn "your global pi has $n extension(s) built for @earendil-works"
   warn "remote mode uses the @fleetagent sandbox build and cannot load them"
   printf '  choose one:\n' >&2
-  printf '    1) pibox migrate && pibox run --mode container   sandboxed, extensions work\n' >&2
+  printf '    1) migrate this project, then continue in container mode\n' >&2
   printf '    2) pibox run --mode native                       no sandbox, exact setup\n' >&2
   printf '    3) pibox run --no-extensions                     sandboxed, extensions off\n' >&2
 
@@ -1358,11 +1390,26 @@ cmd_run() {
     preflight_remote || die "remote cannot load your extensions; use --mode native, --mode container (with pibox migrate), or --no-extensions"
     [[ -n "$PREFLIGHT_MODE" ]] && mode="$PREFLIGHT_MODE"
     [[ "$PREFLIGHT_NO_EXT" == 1 ]] && NO_EXT=1
-    if [[ "$PREFLIGHT_MIGRATE" == 1 ]]; then
-      if [[ "$dry" == 1 ]]; then
-        info "dry run: would run 'pibox migrate' and continue in container mode"
-        exit 0
-      fi
+  fi
+
+  # Session choice immediately after the mode choice.
+  if [[ "$dry" != 1 ]]; then
+    decide_session "$session_mode" ${passthru[@]+"${passthru[@]}"}
+    case "$SESSION_CHOICE" in
+      quit) exit 0 ;;
+      continue) passthru=(-c ${passthru[@]+"${passthru[@]}"}); info "continuing the most recent session" ;;
+      session) passthru=(--session "$SESSION_ID" ${passthru[@]+"${passthru[@]}"}); info "resuming session ${SESSION_ID:0:13}" ;;
+      new) [[ "$session_mode" == ask ]] && info "starting a new session" ;;
+    esac
+  else
+    SESSION_CHOICE=new
+  fi
+
+  if [[ "$PREFLIGHT_MIGRATE" == 1 ]]; then
+    if [[ "$dry" == 1 ]]; then
+      info "dry run: would run 'pibox migrate' and continue in container mode"
+      mode=container
+    else
       info "migrating this project (pibox migrate)"
       cmd_migrate
       mode=container
@@ -1407,13 +1454,6 @@ cmd_run() {
       fi
       ;;
     *) die "--workspace must be mount or git" ;;
-  esac
-
-  decide_session "$session_mode" ${passthru[@]+"${passthru[@]}"}
-  case "$SESSION_CHOICE" in
-    quit) exit 0 ;;
-    continue) passthru=(-c ${passthru[@]+"${passthru[@]}"}); info "continuing the most recent session" ;;
-    new) [[ "$session_mode" == ask ]] && info "starting a new session" ;;
   esac
 
   if [[ "$dry" == 1 ]]; then
