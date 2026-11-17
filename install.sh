@@ -351,13 +351,16 @@ choose_docker() {
         printf '    1) colima (recommended)  brew install colima docker && colima start\n' >&2
         printf '    2) Docker Desktop        brew install --cask docker\n' >&2
         printf '    3) lima (VM)             brew install lima\n' >&2
-        printf '    4) skip\n' >&2
-        printf '  choose [1-4]: ' >&2
+        printf '    4) Apple container (macOS 26+, Apple silicon; use with: pibox run --runtime container)\n' >&2
+        printf '       download the installer package from https://github.com/apple/container/releases, then: container system start\n' >&2
+        printf '    5) skip\n' >&2
+        printf '  choose [1-5]: ' >&2
         local c; read -r c
         case "$c" in
           1|"") echo "brew install colima docker && colima start" ;;
           2) echo "brew install --cask docker" ;;
           3) echo "brew install lima" ;;
+          4) echo ":" ;;
           *) echo "" ;;
         esac
       else

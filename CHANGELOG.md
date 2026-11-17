@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.4.0
+
+- **Apple `container` runtime:** `pibox run --runtime container` and
+  `pibox bootstrap --runtime container` build and run in Apple's container
+  storage (macOS 26+) instead of Docker. `pibox update` follows
+  `PIBOX_ENGINE=container`. `recover`/`clean`/`repair` cover both engines.
+- Flag parity where Apple documents it: labels kept; `--init`,
+  `--cap-drop`, `--security-opt`, and `--read-only` omitted (no Apple
+  equivalent). `remote`/`split` modes stay Docker-only; `auto` selects
+  whole-container mode under `--runtime container`.
+- Fresh Apple `pibox-home` volumes are seeded from the image and chowned on
+  first run instead of failing with `EACCES`.
+- `install.sh` offers Apple's container CLI as a macOS runtime choice.
+
 ## 1.3.0
 
 - **`pibox run` reuses the last model** for the project when `--model` is omitted

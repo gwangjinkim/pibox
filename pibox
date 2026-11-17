@@ -30,12 +30,13 @@ if [[ -z "${PIBOX_CONFIG_DIR:-}" && -d "$HOME/.config/pisbx" && ! -d "$HOME/.con
   chmod 600 "$HOME/.config/pibox"/*.json 2>/dev/null || true
 fi
 
-PIBOX_VERSION="1.3.0"
+PIBOX_VERSION="1.4.0"
 CFG_DIR="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
 IMAGE="${PIBOX_IMAGE:-pibox-sandbox}"
 IMAGE_FULL="${PIBOX_IMAGE_FULL:-pibox-full}"
+ENGINE="${PIBOX_ENGINE:-docker}"
 SANDBOX_PI="${PIBOX_SANDBOX_PI:-$HOME/.pi/agent/npm/node_modules/.bin/pi}"
 LIMA_NAME="${PIBOX_LIMA_NAME:-pibox}"
 AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
@@ -173,18 +174,53 @@ platform_tag() {
   esac
 }
 
+container_ok() {
+  need_cmd container "Apple's container CLI" || return 1
+  if ! container image list >/dev/null 2>&1; then
+    warn "cannot reach the Apple container service"
+    printf '  run: container system start, then retry\n' >&2
+    return 1
+  fi
+}
+
 build_image() {
   local img="$1" dockerfile="$2"
   [[ -f "$dockerfile" ]] || die "no Dockerfile at $dockerfile"
-  docker build --platform "$(platform_tag)" -f "$dockerfile" -t "$img" "$(dirname "$dockerfile")" >&2
+  if [[ "$ENGINE" == container ]]; then
+    container build --platform "$(platform_tag)" -f "$dockerfile" -t "$img" "$(dirname "$dockerfile")" >&2
+  else
+    docker build --platform "$(platform_tag)" -f "$dockerfile" -t "$img" "$(dirname "$dockerfile")" >&2
+  fi
 }
 
 ensure_image() {
   local img="$1" dockerfile="$2"
-  docker image inspect "$img" >/dev/null 2>&1 && return 0
+  if [[ "$ENGINE" == container ]]; then
+    container image inspect "$img" >/dev/null 2>&1 && return 0
+  else
+    docker image inspect "$img" >/dev/null 2>&1 && return 0
+  fi
   [[ -f "$dockerfile" ]] || die "image '$img' is missing and no Dockerfile found at $dockerfile (run: pibox bootstrap)"
   info "building $img (one time)"
-  docker build --platform "$(platform_tag)" -f "$dockerfile" -t "$img" "$(dirname "$dockerfile")" >&2
+  build_image "$img" "$dockerfile"
+}
+
+# Apple `container` keeps its own volume store: a fresh pibox-home does not
+# inherit the image the way Docker named volumes do, so seed it once from the
+# image skeleton and hand ownership to the runtime user.
+container_ensure_home() {
+  local img="$1"
+  container volume inspect pibox-home >/dev/null 2>&1 || \
+    container volume create pibox-home >/dev/null 2>&1 || \
+    die "cannot create the pibox-home Apple container volume"
+  container run --rm --uid 0 --gid 0 --entrypoint sh -v pibox-home:/mnt "$img" -c '
+    set -e
+    if [ ! -f /mnt/.pibox-seeded ]; then
+      cp -a /home/node/.pi/. /mnt/ 2>/dev/null || true
+      touch /mnt/.pibox-seeded
+    fi
+    chown -R 1000:1000 /mnt
+  ' >/dev/null 2>&1 || die "cannot initialize the pibox-home Apple container volume"
 }
 
 lima_state() {
@@ -452,8 +488,17 @@ on_exit() {
 }
 
 repair_volume_owner() {
-  docker run --rm --user 0:0 -v pibox-home:/home/node/.pi alpine:3.20 \
-    chown -R 1000:1000 /home/node/.pi >/dev/null 2>&1 || true
+  if [[ "$ENGINE" == container ]]; then
+    container image inspect "$IMAGE_FULL" >/dev/null 2>&1 || {
+      warn "cannot repair pibox-home: image '$IMAGE_FULL' is missing (run: pibox bootstrap)"
+      return 0
+    }
+    container run --rm --uid 0 --gid 0 --entrypoint sh -v pibox-home:/home/node/.pi "$IMAGE_FULL" \
+      -c 'chown -R 1000:1000 /home/node/.pi' >/dev/null 2>&1 || true
+  else
+    docker run --rm --user 0:0 -v pibox-home:/home/node/.pi alpine:3.20 \
+      chown -R 1000:1000 /home/node/.pi >/dev/null 2>&1 || true
+  fi
 }
 
 cmd_repair() {
@@ -748,6 +793,13 @@ cmd_list() {
 
 # ---------- recovery ----------
 our_containers() {
+  local engine="${1:-docker}"
+  if [[ "$engine" == container ]]; then
+    need_cmd container "Apple's container CLI" >/dev/null 2>&1 || return 0
+    # `container list` columns: ID IMAGE OS ARCH STATE ADDR (name shown as ID).
+    container list 2>/dev/null | awk 'NR>1 && $2 ~ /pibox-(sandbox|full)/ {print $1"\t"$2"\t"$5}' | sort -u
+    return 0
+  fi
   { docker ps -a --filter 'label=pibox=1' --format '{{.ID}}\t{{.Names}}\t{{.Status}}' 2>/dev/null || true
     docker ps -a --filter 'name=^pibox-' --format '{{.ID}}\t{{.Names}}\t{{.Status}}' 2>/dev/null || true
   } | sort -u
@@ -766,16 +818,18 @@ stale_tmp_dirs() {
 }
 
 clean_containers() {
-  local force="${1:-0}" id name status
-  local lines; lines="$(our_containers)"
+  local force="${1:-0}" engine="${2:-docker}" id name status
+  local lines; lines="$(our_containers "$engine")"
   [[ -n "$lines" ]] || return 0
+  local bin=docker
+  [[ "$engine" == container ]] && bin=container
   while IFS=$'\t' read -r id name status; do
     [[ -n "$id" ]] || continue
-    if [[ "$status" == Up* && "$force" != 1 ]]; then
+    if { [[ "$status" == Up* ]] || [[ "$status" == [Rr]unning* ]]; } && [[ "$force" != 1 ]]; then
       warn "running container kept: $name ($status) - use --force to remove"
       continue
     fi
-    docker rm -f "$id" >/dev/null 2>&1 && dim "removed container $name ($status)"
+    "$bin" rm -f "$id" >/dev/null 2>&1 && dim "removed $engine container $name ($status)"
   done <<<"$lines"
 }
 
@@ -804,9 +858,13 @@ cmd_recover() {
   [[ "${1:-}" == "--fix" ]] && fix=1
   local root; root="$(project_root || true)"
 
-  info "containers"
-  local cl; cl="$(our_containers)"
+  info "containers (docker)"
+  local cl; cl="$(our_containers docker)"
   if [[ -z "$cl" ]]; then dim "none"; else printf '%s\n' "$cl" | sed 's/^/  /'; fi
+
+  info "containers (Apple)"
+  local ca; ca="$(our_containers container)"
+  if [[ -z "$ca" ]]; then dim "none (or container service is down)"; else printf '%s\n' "$ca" | sed 's/^/  /'; fi
 
   info "temporary agent dirs"
   local tl; tl="$(stale_tmp_dirs)"
@@ -837,7 +895,8 @@ cmd_recover() {
 
   if [[ "$fix" == 1 ]]; then
     info "applying safe fixes"
-    clean_containers 0
+    clean_containers 0 docker
+    clean_containers 0 container
     clean_tmp
     [[ -n "$root" ]] && cmd_work clean
     if env_incomplete; then
@@ -866,7 +925,10 @@ cmd_clean() {
       *) die "clean: unknown option $1" ;;
     esac
   done
-  [[ "$do_containers" == 1 ]] && clean_containers "$force"
+  if [[ "$do_containers" == 1 ]]; then
+    clean_containers "$force" docker
+    clean_containers "$force" container
+  fi
   [[ "$do_tmp" == 1 ]] && clean_tmp
   [[ "$do_work" == 1 ]] && cmd_work clean
   if [[ "$do_env" == 1 ]]; then
@@ -1399,7 +1461,7 @@ DOCKER
 }
 
 cmd_bootstrap() {
-  local variant="standard" with_list=""
+  local variant="standard" with_list="" engine="docker"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1407,9 +1469,14 @@ cmd_bootstrap() {
       --minimal|--alpine) variant="alpine"; with_list="none"; shift ;;
       --dev|--all) variant="alpine"; with_list="all"; shift ;;
       --standard) variant="standard"; shift ;;
+      --runtime) engine="$2"; shift 2 ;;
       *) die "bootstrap: unknown option $1" ;;
     esac
   done
+  case "$engine" in
+    docker|container) ENGINE="$engine" ;;
+    *) die "bootstrap: --runtime must be docker or container" ;;
+  esac
 
   mkdir -p "$DOCKER_DIR"
   local image_sandbox image_full df_sandbox df_full
@@ -1428,7 +1495,7 @@ cmd_bootstrap() {
 
     info "wrote $df_full and $df_sandbox"
     info "features: ${feats:-none} (tag: $tag)"
-    docker_ok || die "docker required to build images"
+    if [[ "$ENGINE" == container ]]; then container_ok || die "Apple container service required to build images (run: container system start)"; else docker_ok || die "docker required to build images"; fi
     info "building $image_full"
     build_image "$image_full" "$df_full"
     info "building $image_sandbox"
@@ -1479,7 +1546,7 @@ USER 1000:1000
 ENTRYPOINT ["pi"]
 DOCKER
     info "wrote $df_full and $df_sandbox (standard)"
-    docker_ok || die "docker required to build images"
+    if [[ "$ENGINE" == container ]]; then container_ok || die "Apple container service required to build images (run: container system start)"; else docker_ok || die "docker required to build images"; fi
     info "building $image_full"
     build_image "$image_full" "$df_full"
     info "building $image_sandbox"
@@ -1492,7 +1559,15 @@ DOCKER
   fi
 
   info "images ready: $image_sandbox, $image_full"
-  dim "sizes: $(docker image inspect "$image_sandbox" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}'), $(docker image inspect "$image_full" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}')"
+  local size_sandbox size_full
+  if [[ "$ENGINE" == container ]]; then
+    size_sandbox="$(container image inspect "$image_sandbox" 2>/dev/null | jq -r '.[0].variants[0].size // empty' | awk '{printf "%.0fMB", $1/1048576}')"
+    size_full="$(container image inspect "$image_full" 2>/dev/null | jq -r '.[0].variants[0].size // empty' | awk '{printf "%.0fMB", $1/1048576}')"
+  else
+    size_sandbox="$(docker image inspect "$image_sandbox" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}')"
+    size_full="$(docker image inspect "$image_full" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0fMB", $1/1048576}')"
+  fi
+  dim "sizes: ${size_sandbox:-(unknown)}, ${size_full:-(unknown)}"
 }
 
 
@@ -1652,6 +1727,7 @@ cmd_run() {
 
   resolve_images
   runtime="${runtime:-$(cfg_default runtime)}"; runtime="${runtime:-docker}"
+  ENGINE="$runtime"
   mode="${mode:-$(cfg_default mode)}"; mode="${mode:-auto}"
 
   resolve_key "$provider" || exit $?
@@ -1659,6 +1735,9 @@ cmd_run() {
 
   if [[ "$mode" == auto ]]; then
     if project_root >/dev/null 2>&1; then
+      mode=container
+    elif [[ "$ENGINE" == container ]]; then
+      # remote/split daemons are Docker-only; Apple containers run whole-pi
       mode=container
     else
       local help_text=""
@@ -1669,6 +1748,10 @@ cmd_run() {
         mode=container
       fi
     fi
+  fi
+
+  if [[ "$mode" == remote && "$ENGINE" == container ]]; then
+    die "--mode remote needs Docker (sandbox daemon + port publishing); use --runtime docker or --mode container"
   fi
 
   if [[ "$mode" == remote && "$ROOT" == 1 ]]; then
@@ -1715,8 +1798,9 @@ cmd_run() {
   esac
   case "$runtime" in
     docker) : ;;
+    container) : ;;
     lima) : ;;
-    *) die "--runtime must be docker or lima" ;;
+    *) die "--runtime must be docker, container, or lima" ;;
   esac
 
   guard_workspace "$(workspace_src)" "$force"
@@ -1834,8 +1918,15 @@ cmd_run() {
   fi
 
   # container mode: whole pi process inside the container
-  docker_ok || die "docker unavailable"
+  if [[ "$ENGINE" == container ]]; then
+    container_ok || die "Apple container service unavailable (run: container system start)"
+  else
+    docker_ok || die "docker unavailable"
+  fi
   ensure_image "$IMAGE_FULL" "$DOCKER_DIR/Dockerfile"
+  if [[ "$ENGINE" == container ]]; then
+    container_ensure_home "$IMAGE_FULL"
+  fi
   local sbase sessions_target store; sbase="$(session_base)"; mkdir -p "$sbase"
   sessions_target="/home/node/.pi/agent/sessions"
   store="$(pnpm_store)"; mkdir -p "$store"
@@ -1846,7 +1937,9 @@ cmd_run() {
   fi
   envmount+=(-v "$store:/home/node/.cache/pibox/pnpm-store" -e "PIBOX_PNPM_STORE=/home/node/.cache/pibox/pnpm-store")
   local -a tty=()
-  have_tty && tty=(-it)
+  if have_tty; then
+    if [[ "$ENGINE" == container ]]; then tty=(-i -t); else tty=(-it); fi
+  fi
   local -a rootargs=()
   if [[ "$ROOT" == 1 ]]; then
     rootargs=(--user 0:0 -e HOME=/home/node)
@@ -1854,16 +1947,29 @@ cmd_run() {
   fi
   info "running the whole pi process in the container"
   local rc=0
-  skey run --no-redact "$provider" "$variant" --env "$envvar" -y -- \
-    docker run --rm ${tty[@]+"${tty[@]}"} ${rootargs[@]+"${rootargs[@]}"} --label pibox=1 --init \
-      --cap-drop=ALL --security-opt=no-new-privileges \
-      -e "$envvar" \
-      -v "$(workspace_src):/workspace" \
-      ${ATTACH_V[@]+"${ATTACH_V[@]}"} \
-      ${envmount[@]+"${envmount[@]}"} \
-      -v "$sbase:$sessions_target" \
-      -v pibox-home:/home/node/.pi \
-      "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"} || rc=$?
+  if [[ "$ENGINE" == container ]]; then
+    # Apple documents no --init, --cap-drop, or --security-opt; keep labels.
+    skey run --no-redact "$provider" "$variant" --env "$envvar" -y -- \
+      container run --rm ${tty[@]+"${tty[@]}"} ${rootargs[@]+"${rootargs[@]}"} -l pibox=1 \
+        -e "$envvar" \
+        -v "$(workspace_src):/workspace" \
+        ${ATTACH_V[@]+"${ATTACH_V[@]}"} \
+        ${envmount[@]+"${envmount[@]}"} \
+        -v "$sbase:$sessions_target" \
+        -v pibox-home:/home/node/.pi \
+        "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"} || rc=$?
+  else
+    skey run --no-redact "$provider" "$variant" --env "$envvar" -y -- \
+      docker run --rm ${tty[@]+"${tty[@]}"} ${rootargs[@]+"${rootargs[@]}"} --label pibox=1 --init \
+        --cap-drop=ALL --security-opt=no-new-privileges \
+        -e "$envvar" \
+        -v "$(workspace_src):/workspace" \
+        ${ATTACH_V[@]+"${ATTACH_V[@]}"} \
+        ${envmount[@]+"${envmount[@]}"} \
+        -v "$sbase:$sessions_target" \
+        -v pibox-home:/home/node/.pi \
+        "$IMAGE_FULL" --model "$model" ${passthru[@]+"${passthru[@]}"} || rc=$?
+  fi
   [[ "$ROOT" == 1 ]] && repair_volume_owner
   return $rc
 }
@@ -2266,8 +2372,9 @@ COMMANDS
       prompts), and auth.json entries. Writes pibox.toml / pibox.lock
       and builds .pibox/env.
 
-  bootstrap [--with LIST | --minimal | --dev | --standard]
+  bootstrap [--with LIST | --minimal | --dev | --standard] [--runtime docker|container]
       Build both images. Required once before the first run.
+      `--runtime container` builds into Apple's container storage instead.
 
       --with LIST   Alpine + single pi binary + selected toolchains.
                     Features: python, node, go, rust, build, cli
@@ -2312,7 +2419,10 @@ COMMANDS
       --model provider/model  use exactly that model
       --pick-model            force the picker
 
-      --runtime docker|lima      where tools execute (default: docker)
+      --runtime docker|container|lima
+                                 where tools execute (default: docker)
+                                 container = Apple's container CLI (macOS 26+,
+                                 whole-container mode only)
       --mode remote|container|native
                                  remote = orchestrate on host, tools in
                                  container (default: auto)
@@ -2409,6 +2519,7 @@ ENVIRONMENT
   PIBOX_SANDBOX_PI       host pi binary that supports --remote
   PIBOX_PI               pi binary for --mode native (default: pi)
   PIBOX_LIMA_NAME        Lima instance (default pibox)
+  PIBOX_ENGINE           container engine: docker | container (default docker)
   PIBOX_SESSION_MODE     default for --session-mode
   PIBOX_NO_EXTENSIONS=1  pass --no-extensions in remote mode
   PIBOX_REPO             override the clone path used by update

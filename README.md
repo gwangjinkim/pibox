@@ -110,7 +110,15 @@ boundary by itself: read [Threat model](#threat-model) and
 code.
 
 Requires: `bash`, `jq`, [`skey`](https://github.com/gwangjinkim/skey),
-`docker` and/or `limactl`, and a `pi` build that supports `--remote`.
+`docker` and/or `limactl` (or Apple's `container` CLI on macOS 26+ with
+`--runtime container`), and a `pi` build that supports `--remote`.
+
+Running more than pi? [agentbox](https://github.com/gwangjinkim/agentbox) is
+the multi-agent evolution of the same idea (pi, omp, opencode, codex, claude,
+dsh, agy behind one keyring and one interface); its
+[why-doc](https://github.com/gwangjinkim/agentbox/blob/main/docs/why.md) covers
+the shared threat model, what the sandboxing does and does not defend against,
+and when to use each tool.
 
 ---
 
@@ -258,7 +266,7 @@ Four principles:
                                       │
                     2. fetch secret from OS keyring (skey)
                                       │
-                    3. choose runtime (docker | lima)
+                    3. choose runtime (docker | container | lima)
                                       │
               ┌───────────────────────┴────────────────────────┐
               │                                                │
@@ -553,7 +561,7 @@ install is the most common source of confusing failures.
 | Option | Default | Why |
 |---|---|---|
 | `--model P/M` | required | the prefix selects the credential; no key names to remember |
-| `--runtime docker\|lima` | `docker` | docker is fast and cross-platform; lima gives a real VM kernel boundary |
+| `--runtime docker\|container\|lima` | `docker` | docker is fast and cross-platform; `container` is Apple's native CLI (macOS 26+, whole-container mode only); lima gives a real VM kernel boundary |
 | `--mode remote\|container\|native` | `auto` | `remote` keeps the key out of the sandbox; `container` is portable and CI-friendly; `native` uses your exact `pi` and config, without a sandbox |
 | `--dry-run` | off | shows the plan without reading a secret or starting anything |
 | `--force` | off | allows mounting `$HOME` or `/` as the workspace (dangerous) |
@@ -892,6 +900,9 @@ These were reproduced during development and are documented rather than hidden.
 - [ ] Multi-secret bundles for Azure/AWS/Cloudflare (JSON in one keyring entry).
 - [ ] `pibox run --ephemeral` to mount the workspace read-only and copy it into a
       disposable volume.
+- [x] `--runtime container` for Apple's native container CLI on macOS 26+
+      (whole-container mode; separate volume store, `container_ensure_home`
+      seeds `pibox-home` on first run).
 - [ ] `--runtime wsl` for Windows without Docker Desktop.
 - [ ] Shell completions.
 - [ ] Reproducible image digests in the README.

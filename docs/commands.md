@@ -82,9 +82,10 @@ manifest, and re-syncs the environment.
 
 ---
 
-## `pibox bootstrap [--with LIST | --minimal | --dev | --standard]`
+## `pibox bootstrap [--with LIST | --minimal | --dev | --standard] [--runtime docker|container]`
 
-Builds both images. Features can be combined:
+Builds both images. Features can be combined. `--runtime container` builds into
+Apple's container storage instead of Docker (macOS 26+).
 
 | Feature | Aliases | Adds |
 |---|---|---|
@@ -144,7 +145,7 @@ Steps:
 | Option | Default | Meaning |
 |---|---|---|
 | `--model P/M` | required | the prefix `P` selects the credential |
-| `--runtime docker\|lima` | `docker` | where tools execute |
+| `--runtime docker\|container\|lima` | `docker` | where tools execute (`container` = Apple's CLI, macOS 26+, whole-container mode only; remote mode stays Docker-only) |
 | `--mode auto\|remote\|container\|native` | `auto` | remote = orchestrate on host, tools in container; native = your own `pi`, no sandbox |
 | `--session-mode ask\|continue\|new` | `ask` | what to do when the folder already has sessions |
 | `--workspace mount\|git` | `mount` | live bind mount, or an isolated git worktree |
