@@ -30,7 +30,7 @@ if [[ -z "${PIBOX_CONFIG_DIR:-}" && -d "$HOME/.config/pisbx" && ! -d "$HOME/.con
   chmod 600 "$HOME/.config/pibox"/*.json 2>/dev/null || true
 fi
 
-PIBOX_VERSION="1.4.0"
+PIBOX_VERSION="1.5.0"
 CFG_DIR="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -631,6 +631,133 @@ cmd_attach() {
       fi
       ;;
     *) die "attach: use add|list|remove" ;;
+  esac
+}
+
+# ---------- machine-local backups ----------
+backup_root() { printf '%s' "${PIBOX_BACKUP_DIR:-$HOME/.pibox/backups}" ;}
+backup_sanitize() { printf '%s' "$1" | tr -cd '[:alnum:]_-' | cut -c1-40; }
+
+backup_describe() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 1
+  local name size when root
+  name="$(basename "$dir")"
+  size="$(du -sh "$dir" 2>/dev/null | cut -f1)"
+  when="$(grep '^date=' "$dir/meta.txt" 2>/dev/null | cut -d= -f2-)"
+  root="$(grep '^root=' "$dir/meta.txt" 2>/dev/null | cut -d= -f2-)"
+  [[ -n "$when" ]] || when="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$dir" 2>/dev/null || stat -c '%y' "$dir" 2>/dev/null | cut -d. -f1 || echo ?)"
+  printf '%s  %s  %s  %s\n' "$name" "${size:-?}" "${when:-?}" "${root:-no project}"
+}
+
+# Internal: snapshot current machine-local state into backups/<name>.
+# Never touches the keyring; secrets are never written to a backup.
+_backup_create() {
+  local name="$1" root dir stamp
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  if [[ -n "$name" ]]; then
+    name="${stamp}-$(backup_sanitize "$name")"
+  else
+    name="$stamp"
+  fi
+  dir="$(backup_root)/$name"
+  [[ -e "$dir" ]] && die "backup '$name' already exists (restore or clean it first)"
+  mkdir -p "$dir/config" "$dir/manifest" && chmod 700 "$dir"
+  root="$(project_root || true)"
+
+  {
+    printf 'pibox_version=%s\n' "$PIBOX_VERSION"
+    printf 'date=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'root=%s\n' "$root"
+  } >"$dir/meta.txt"
+  cmd_doctor >"$dir/doctor.txt" 2>&1 || true
+  if [[ -f "$AGENT_DIR/auth.json" ]]; then
+    jq -r 'keys[]' "$AGENT_DIR/auth.json" 2>/dev/null >"$dir/providers.txt" || true
+  fi
+  if [[ -d "$CFG_DIR" ]]; then
+    cp -R "$CFG_DIR/." "$dir/config/" 2>/dev/null || true
+    chmod -R go-rwx "$dir/config" 2>/dev/null || true
+  fi
+  if [[ -d "$AGENT_DIR" ]]; then
+    # sessions, auth.json (secrets), and npm/ (rebuilt by sync) stay out.
+    tar -czf "$dir/pi-agent.tgz" -C "$AGENT_DIR" \
+      --exclude=./sessions --exclude=./auth.json --exclude=./npm . 2>/dev/null || true
+  fi
+  if [[ -n "$root" ]]; then
+    for f in pibox.toml pibox.lock pibox.pnpm-lock.yaml; do
+      [[ -f "$root/$f" ]] && cp "$root/$f" "$dir/manifest/"
+    done
+  fi
+  cat >"$dir/README.txt" <<EOF
+pibox backup '$name' (created $(grep '^date=' "$dir/meta.txt" | cut -d= -f2-)).
+Project root at backup time: ${root:-(none - global setup only)}.
+Contents: doctor.txt (health snapshot), providers.txt (provider NAMES only,
+no secrets), config/ (pibox config + Dockerfiles), pi-agent.tgz (agent dir
+without sessions, auth.json, or npm/), manifest/ (project manifest+lock).
+The keyring was NOT touched: re-register secrets with your own credentials
+(pi login, then: pibox init --register).
+Restore with: pibox backup restore $name
+EOF
+  printf '%s\n' "$dir"
+}
+
+cmd_backup() {
+  local action="create" name=""
+  if [[ "${1:-}" == list || "${1:-}" == restore || "${1:-}" == clean || "${1:-}" == create ]]; then
+    action="$1"; shift
+  fi
+  [[ "$action" == restore || "$action" == clean ]] && { [[ -n "${1:-}" ]] || die "usage: pibox backup $action NAME (see: pibox backup list)"; name="$1"; }
+  [[ "$action" == create ]] && { name="$(backup_sanitize "${1:-}")"; }
+
+  local dir
+  case "$action" in
+    create)
+      dir="$(_backup_create "$name")"
+      info "backed up to $dir"
+      dim "keys stay in your keyring; restore with: pibox backup restore $(basename "$dir")"
+      ;;
+    list)
+      if [[ ! -d "$(backup_root)" ]]; then info "no backups yet"; return 0; fi
+      local d found=0
+      for d in "$(backup_root)"/*; do
+        [[ -d "$d" ]] || continue
+        backup_describe "$d" || continue
+        found=1
+      done
+      [[ "$found" == 1 ]] || info "no backups yet"
+      ;;
+    restore)
+      dir="$(backup_root)/$name"
+      [[ -d "$dir" ]] || die "no backup named '$name' (see: pibox backup list)"
+      local root; root="$(grep '^root=' "$dir/meta.txt" 2>/dev/null | cut -d= -f2-)"
+      # Snapshot the present before overwriting it, so restore is reversible.
+      local pre; pre="$(_backup_create "auto-pre-restore")"
+      info "saved current state to $pre (rollback safety net)"
+      if [[ -d "$dir/config" ]]; then
+        mkdir -p "$CFG_DIR"
+        cp -R "$dir/config/." "$CFG_DIR/" && chmod 700 "$CFG_DIR" 2>/dev/null || true
+        info "restored pibox config"
+      fi
+      if [[ -f "$dir/pi-agent.tgz" ]]; then
+        mkdir -p "$AGENT_DIR"
+        tar -xzf "$dir/pi-agent.tgz" -C "$AGENT_DIR" || die "failed to unpack pi-agent.tgz"
+        chmod 700 "$AGENT_DIR" 2>/dev/null || true
+        info "restored agent dir (sessions, auth.json, and npm/ untouched)"
+      fi
+      if [[ -n "$root" && -d "$root" && -n "$(ls "$dir/manifest" 2>/dev/null)" ]]; then
+        cp "$dir/manifest/"* "$root/" && info "restored manifest to $root"
+      elif [[ -n "$(ls "$dir/manifest" 2>/dev/null)" ]]; then
+        warn "backup belongs to $root, which does not exist here; manifest not restored"
+        dim "copy these yourself: $dir/manifest/"
+      fi
+      info "next: pibox sync, pibox doctor, then re-register your own keys"
+      dim "undo: pibox backup restore $(basename "$pre")"
+      ;;
+    clean)
+      dir="$(backup_root)/$name"
+      [[ -d "$dir" ]] || die "no backup named '$name' (see: pibox backup list)"
+      rm -rf "$dir" && info "removed backup $name"
+      ;;
   esac
 }
 
@@ -2461,6 +2588,12 @@ COMMANDS
   env status|init
       Inspect or create the project environment.
 
+  backup [create [name]|list|restore NAME|clean NAME]
+      Snapshot machine-local state into ~/.pibox/backups/ (config, agent dir
+      without sessions/auth.json/npm, manifest, doctor output). The keyring
+      is never touched: secrets are never written to a backup. Restoring
+      snapshots the present first, so it stays reversible.
+
   work list|clean
       List or remove git workspaces under .pibox/work/.
 
@@ -2541,6 +2674,7 @@ main() {
     add) cmd_add "$@" ;;
     remove) cmd_remove "$@" ;;
     env) cmd_env "$@" ;;
+    backup) cmd_backup "$@" ;;
     run) cmd_run "$@" ;;
     vm) cmd_vm "$@" ;;
     work) cmd_work "$@" ;;

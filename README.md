@@ -96,6 +96,7 @@ More: [Quick start](docs/quickstart.md) · [Command reference](docs/commands.md)
 | work in a git worktree | `pibox run --workspace git` |
 | install tools at runtime | `pibox run --mode container --root` (then `apk add`) |
 | recover after a crash | `pibox recover`, `pibox clean`, `pibox repair` |
+| snapshot / restore your setup | `pibox backup [create [name]\|list\|restore NAME\|clean NAME]` (keys never included) |
 | install Debian/glibc | `pibox bootstrap --standard` |
 | update | `pibox update` |
 

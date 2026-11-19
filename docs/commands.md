@@ -257,6 +257,24 @@ Targeted cleanup. Default: stopped containers + stale temp dirs.
 | `--force` | include running containers |
 | `--all` | all of the above except removing running containers |
 
+## `pibox backup [create [name]|list|restore NAME|clean NAME]`
+
+Snapshot machine-local state into `~/.pibox/backups/<stamp>[-name]/`
+(`PIBOX_BACKUP_DIR` overrides): pibox config, agent dir without sessions,
+`auth.json`, or `npm/` (rebuilt by `sync`), the project manifest+lock, a
+doctor snapshot, and provider names. The keyring is never touched, so no
+secrets are ever written to a backup.
+
+- `create [name]` snapshots the present (default name: the timestamp)
+- `list` shows name, size, date, and project root per backup
+- `restore NAME` snapshots the present first (rollback safety net), then
+  restores config, agent dir, and — if run where the backup's project lives —
+  the manifest; ends by telling you how to undo it
+- `clean NAME` removes one backup
+
+After restoring: `pibox sync`, `pibox doctor`, then re-register your own keys
+(`pi` login, then `pibox init --register`).
+
 ## `pibox sessions list|resume|export`
 
 ```bash

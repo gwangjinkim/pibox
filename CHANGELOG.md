@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.0
+
+- **New `pibox backup` command:** snapshot machine-local state into
+  `~/.pibox/backups/` (`PIBOX_BACKUP_DIR` overrides) — `create [name]`,
+  `list`, `restore NAME`, `clean NAME`. Backs up config, the agent dir
+  without sessions/`auth.json`/`npm`, the project manifest, a doctor
+  snapshot, and provider names. The keyring is never touched, so backups
+  contain no secrets. `restore` snapshots the present first, so every
+  restore prints its own undo command.
+
 ## 1.4.0
 
 - **Apple `container` runtime:** `pibox run --runtime container` and
