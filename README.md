@@ -494,6 +494,7 @@ copying the script without a clone, set `PIBOX_REPO=/path/to/pibox`.
 | [docs/environment.md](docs/environment.md) | project environments, ownership rules, pnpm store, timings |
 | [docs/combinations.md](docs/combinations.md) | image features, measured sizes, and which combination to pick |
 | [docs/safety.md](docs/safety.md) | recovery, running sessions, volume ownership, host folder mounts |
+| [agentbox docs/sharing-setups.md](https://github.com/gwangjinkim/agentbox/blob/main/docs/sharing-setups.md) | exporting/receiving projects, fresh installs, backup and overwrite |
 | [CHANGELOG.md](CHANGELOG.md) | what changed in each release |
 
 If you only read one page: run `pibox bootstrap` once, then `pibox run --model
