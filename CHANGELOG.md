@@ -12,6 +12,10 @@
 - **Sync keeps disabled packages off:** `sync` now writes the object form
   (`{source, extensions: [], ...}`) for packages the active profile disabled,
   instead of switching every manifest extension back on.
+- **Disabled set travels with the repo:** `export`/`migrate` record the disabled
+  sources in `pibox.lock` (`disabled`) and `sync` reads them from there, so a
+  clone or another machine keeps those packages off. The host
+  `~/.pi/agent/settings.json` is read only when the lock predates the field.
 
 ## 1.6.0
 

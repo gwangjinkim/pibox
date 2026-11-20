@@ -47,8 +47,12 @@ version = "1.5.0"
 "npm:pi-effort" = "0.1.1"
 ```
 
-`pibox.lock` holds the same data as JSON for tooling. `pibox.pnpm-lock.yaml` pins
-transitive dependencies so two machines resolve the same tree.
+`pibox.lock` holds the same data as JSON for tooling, plus `disabled`: the
+sources the active pi profile turned off. `export`/`migrate` record that list
+and `sync` keeps those packages in their object form, so a clone stays off
+instead of trusting the machine's `~/.pi/agent/settings.json` (read only for
+locks written before the field). `pibox.pnpm-lock.yaml` pins transitive
+dependencies so two machines resolve the same tree.
 
 ## Why pnpm
 

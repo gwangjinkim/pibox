@@ -1337,7 +1337,8 @@ cmd_migrate() {
   local packages=()
   if [[ -f "$settings" ]]; then
     while IFS= read -r src; do [[ -n "$src" ]] && packages+=("$src"); done \
-      < <(jq -r '.packages[]? // empty' "$settings" 2>/dev/null)
+      < <(jq -r '.packages[]? // empty | if type == "object" then (.source // empty) else . end' \
+        "$settings" 2>/dev/null)
   fi
   printf '  extensions: %d\n' "${#packages[@]}"
   local src name ver
@@ -1406,10 +1407,14 @@ cmd_migrate() {
     esac
     jq --arg s "$src" --arg v "$ver" '.extensions[$s] = $v' "$tmp" >"$tmp.2" && mv "$tmp.2" "$tmp"
   done
+  jq --argjson d "$(disabled_sources "$settings")" '.disabled = $d' "$tmp" >"$tmp.2" \
+    && mv "$tmp.2" "$tmp"
 
   # merge with an existing project lock; project entries win
   if [[ -f "$(lock_path "$root")" ]]; then
-    jq -s '.[0] as $e | .[1] as $g | $g | .extensions = ($g.extensions * $e.extensions)' \
+    jq -s '.[0] as $e | .[1] as $g | $g
+      | .extensions = ($g.extensions * $e.extensions)
+      | .disabled = ((($e.disabled // []) + ($g.disabled // [])) | unique)' \
       "$(lock_path "$root")" "$tmp" >"$tmp.3" && mv "$tmp.3" "$(lock_path "$root")"
     rm -f "$tmp"
   else
@@ -2277,6 +2282,11 @@ spec_for() {
   esac
 }
 
+# sources the active profile turned off (settings.json keeps those as objects)
+disabled_sources() {
+  jq -c '[.packages[]? | objects | .source | select(type == "string")]' "$1" 2>/dev/null || printf '[]'
+}
+
 pnpm_store() {
   printf '%s' "${PIBOX_PNPM_STORE:-${XDG_CACHE_HOME:-$HOME/.cache}/pibox/pnpm-store}"
 }
@@ -2325,12 +2335,10 @@ sync_env() {
 
   # settings.packages mirrors the manifest, except that packages the active
   # profile disabled keep their {source, extensions: [], ...} object form (what
-  # pi-profile-studio writes) instead of being switched back on.
-  disabled='[]'
-  if [[ -f "$AGENT_DIR/settings.json" ]]; then
-    disabled="$(jq -c '[.packages[]? | objects | .source | select(type == "string")]' \
-      "$AGENT_DIR/settings.json" 2>/dev/null || printf '[]')"
-  fi
+  # pi-profile-studio writes) instead of being switched back on. The set travels
+  # in pibox.lock; only a lock written before that field reads the host.
+  disabled="$(jq -c '.disabled // empty' "$(lock_path "$root")")"
+  [[ -n "$disabled" ]] || disabled="$(disabled_sources "$AGENT_DIR/settings.json")"
   pkgs="$(jq -c --argjson off "$disabled" '[.extensions | to_entries[] | .key as $s | .value as $v
     | if ($off | index($s)) then {source: $s, extensions: [], skills: [], prompts: [], themes: []}
       else $s + (if $v == "path" or $v == "" then "" else "@" + $v end) end]' "$(lock_path "$root")")"
@@ -2398,6 +2406,9 @@ cmd_export() {
       jq --arg s "$source" --arg v "$version" '.extensions[$s] = $v' "$tmp" >"$tmp.2" && mv "$tmp.2" "$tmp"
     done < <(jq -r '.packages[]? // empty | if type == "object" then (.source // empty) else . end' "$env/settings.json" 2>/dev/null)
   fi
+
+  jq --argjson d "$(disabled_sources "$env/settings.json")" '.disabled = $d' "$tmp" >"$tmp.2" \
+    && mv "$tmp.2" "$tmp"
 
   mkdir -p "$root"
   mv "$tmp" "$(lock_path "$root")"
