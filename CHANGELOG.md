@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.0
+
+- **Interactive engine picker:** omitting `--runtime` in a terminal now asks
+  which engine to use (availability detected, OS default preselected:
+  Apple `container` on macOS when its service is up, Docker otherwise).
+  Answer once and pibox offers to remember it as the default. Scripts and
+  CI are unaffected (no TTY → smart default, no prompt); `PIBOX_ENGINE`
+  always wins.
+- Fresh installs no longer bake in a `docker` default, so new users meet
+  the picker on first run; existing configs keep working unchanged.
+
 ## 1.5.0
 
 - **New `pibox backup` command:** snapshot machine-local state into

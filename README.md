@@ -495,6 +495,7 @@ copying the script without a clone, set `PIBOX_REPO=/path/to/pibox`.
 | [docs/environment.md](docs/environment.md) | project environments, ownership rules, pnpm store, timings |
 | [docs/combinations.md](docs/combinations.md) | image features, measured sizes, and which combination to pick |
 | [docs/safety.md](docs/safety.md) | recovery, running sessions, volume ownership, host folder mounts |
+| [docs/engines.md](docs/engines.md) | docker vs Apple container vs Lima: defaults, picker, switching |
 | [agentbox docs/sharing-setups.md](https://github.com/gwangjinkim/agentbox/blob/main/docs/sharing-setups.md) | exporting/receiving projects, fresh installs, backup and overwrite |
 | [CHANGELOG.md](CHANGELOG.md) | what changed in each release |
 
@@ -563,7 +564,7 @@ install is the most common source of confusing failures.
 | Option | Default | Why |
 |---|---|---|
 | `--model P/M` | required | the prefix selects the credential; no key names to remember |
-| `--runtime docker\|container\|lima` | `docker` | docker is fast and cross-platform; `container` is Apple's native CLI (macOS 26+, whole-container mode only); lima gives a real VM kernel boundary |
+| `--runtime docker\|container\|lima` | smart OS default (Apple `container` on macOS when its service is up) | docker is fast and cross-platform; `container` is Apple's native CLI (macOS 26+, whole-container mode only); lima gives a real VM kernel boundary. Omit it in a terminal and pibox asks, offering to remember your pick (`PIBOX_ENGINE` overrides) |
 | `--mode remote\|container\|native` | `auto` | `remote` keeps the key out of the sandbox; `container` is portable and CI-friendly; `native` uses your exact `pi` and config, without a sandbox |
 | `--dry-run` | off | shows the plan without reading a secret or starting anything |
 | `--force` | off | allows mounting `$HOME` or `/` as the workspace (dangerous) |

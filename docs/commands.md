@@ -145,7 +145,7 @@ Steps:
 | Option | Default | Meaning |
 |---|---|---|
 | `--model P/M` | required | the prefix `P` selects the credential |
-| `--runtime docker\|container\|lima` | `docker` | where tools execute (`container` = Apple's CLI, macOS 26+, whole-container mode only; remote mode stays Docker-only) |
+| `--runtime docker\|container\|lima` | smart OS default (Apple `container` on macOS when its service is up, else `docker`) | where tools execute (`container` = Apple's CLI, macOS 26+, whole-container mode only; remote mode stays Docker-only). Omit it in a terminal and pibox asks, offering to remember your pick; `PIBOX_ENGINE` always wins |
 | `--mode auto\|remote\|container\|native` | `auto` | remote = orchestrate on host, tools in container; native = your own `pi`, no sandbox |
 | `--session-mode ask\|continue\|new` | `ask` | what to do when the folder already has sessions |
 | `--workspace mount\|git` | `mount` | live bind mount, or an isolated git worktree |
