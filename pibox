@@ -2253,7 +2253,7 @@ seed_env() {
 
   # interface files: copied into base/, exposed with relative links so the
   # environment still works when it is mounted into a container or VM
-  for f in AGENTS.md SYSTEM.md mcp.json models-store.json; do
+  for f in AGENTS.md SYSTEM.md mcp.json models-store.json profile-studio.json; do
     if [[ -e "$AGENT_DIR/$f" ]]; then
       cp -R "$AGENT_DIR/$f" "$base/$f"
       ln -s "base/$f" "$env/$f"
@@ -2387,7 +2387,7 @@ cmd_export() {
           ;;
       esac
       jq --arg s "$source" --arg v "$version" '.extensions[$s] = $v' "$tmp" >"$tmp.2" && mv "$tmp.2" "$tmp"
-    done < <(jq -r '.packages[]? // empty' "$env/settings.json" 2>/dev/null)
+    done < <(jq -r '.packages[]? // empty | if type == "object" then (.source // empty) else . end' "$env/settings.json" 2>/dev/null)
   fi
 
   mkdir -p "$root"

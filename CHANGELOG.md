@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Disabled packages export again:** `settings.json` `packages` entries in the
+  object form (`{source, extensions: [], ...}`, as pi-profile-studio writes for
+  packages a profile turned off) are now read by `export` instead of landing in
+  `pibox.toml` as a useless object key.
+- **Profiles survive inside the sandbox:** `sync` now seeds `profile-studio.json`
+  into `.pibox/env` next to `settings.json`, so the extension finds your profiles
+  instead of regenerating its defaults.
+
 ## 1.6.0
 
 - **Interactive engine picker:** omitting `--runtime` in a terminal now asks
