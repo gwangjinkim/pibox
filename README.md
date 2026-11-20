@@ -541,9 +541,9 @@ building from a pinned `PI_VERSION` makes the environment reproducible.
 
 ### `pibox doctor`
 
-Prints versions, docker/lima state, keyring entries, file permissions, and warns
-about plaintext keys. Exit code is non-zero when a security check fails, so it is
-usable in CI.
+Prints versions, docker/lima state, keyring entries, file permissions, clipboard
+support, and warns about plaintext keys. Exit code is non-zero when a security
+check fails, so it is usable in CI.
 
 Why it exists: most security failures are configuration drift, not exploits.
 

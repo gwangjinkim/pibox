@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.1
+
+- **`pibox doctor` checks clipboard copy-out:** reports pi's
+  `fullscreenCopyOnSelect` setting, whether the terminal honors the app's
+  OSC-52 copy requests (with an Option-drag bypass tip for Terminal.app),
+  and tmux's `set-clipboard` passthrough. See
+  `docs/troubleshooting.md#i-cannot-copy-text-out-of-the-pi-tui`.
+
 ## Unreleased
 
 - **Disabled packages export again:** `settings.json` `packages` entries in the

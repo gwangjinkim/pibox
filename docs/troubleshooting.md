@@ -70,6 +70,23 @@ pibox update
 
 ---
 
+## I cannot copy text out of the pi TUI
+
+Expected — mostly. The TUI captures the mouse, so your terminal's own
+selection is hijacked. pi then copies mouse selections to the clipboard for
+you over OSC-52 (`pibox doctor` reports what it found under "clipboard"):
+
+- Make sure `fullscreenCopyOnSelect` is on (`pi config` toggles it; off means
+  selections never auto-copy, on is the default).
+- The terminal must honor OSC-52: iTerm2, Ghostty, WezTerm, and kitty do;
+  **Terminal.app does not**; VS Code's integrated terminal is unreliable.
+- Inside tmux, run `tmux set -g set-clipboard on` and reattach, or tmux swallows
+  the app's copy requests.
+- Escape hatch that always works, in any terminal: hold **Option** while
+  dragging (macOS) to select with the terminal instead of the app.
+- Nuclear option: dump the session to HTML and copy from the browser —
+  `pibox sessions export latest out.html`.
+
 ## `the installed pi does not support --remote`
 
 Split mode needs a `pi` build that implements the workspace daemon. The installed

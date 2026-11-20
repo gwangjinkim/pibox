@@ -30,7 +30,7 @@ if [[ -z "${PIBOX_CONFIG_DIR:-}" && -d "$HOME/.config/pisbx" && ! -d "$HOME/.con
   chmod 600 "$HOME/.config/pibox"/*.json 2>/dev/null || true
 fi
 
-PIBOX_VERSION="1.6.0"
+PIBOX_VERSION="1.6.1"
 CFG_DIR="${PIBOX_CONFIG_DIR:-$HOME/.config/pibox}"
 CFG="$CFG_DIR/config.json"
 DOCKER_DIR="$CFG_DIR/docker"
@@ -1491,7 +1491,46 @@ cmd_doctor() {
     printf '  missing\n'
   fi
 
-  printf '\nsecurity checks:\n'
+  printf '\nclipboard (copying out of the pi TUI):\n'
+  # pi captures the mouse, so the terminal's own selection is hijacked; pi
+  # copies mouse selections back over OSC-52, which the terminal must honor.
+  if jq -e '.fullscreenCopyOnSelect == false' "$AGENT_DIR/settings.json" >/dev/null 2>&1; then
+    warn "pi fullscreenCopyOnSelect is off: selections won't auto-copy (flip it in 'pi config')"
+  else
+    printf '  pi copy-on-select: on (default)\n'
+  fi
+  _term="$(printf '%s' "${TERM_PROGRAM:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$_term" in
+    *apple_terminal*)
+      warn "Terminal.app ignores the app's copy requests (no OSC-52 support)"
+      printf '  hold Option while dragging to select with the terminal itself,\n'
+      printf '  switch to iTerm2/Ghostty/WezTerm/kitty, or export the session:\n'
+      printf '    pibox sessions export latest out.html   # open it and copy from the browser\n'
+      ;;
+    *iterm*|*ghostty*|*wezterm*|*kitty*|*xterm-kitty*)
+      printf '  terminal %s: honors app copy requests (OSC-52)\n' "${TERM_PROGRAM:-unknown}"
+      ;;
+    *vscode*|*code*)
+      printf '  VS Code terminal: app copy requests may not arrive; hold Alt while dragging to select with the terminal itself\n'
+      ;;
+    "")
+      printf '  terminal: unknown ($TERM_PROGRAM unset)\n'
+      ;;
+    *)
+      printf '  terminal %s: if selections never land in your clipboard, it is ignoring the copy requests (OSC-52)\n' "${TERM_PROGRAM:-unknown}"
+      ;;
+  esac
+  if [[ -n "${TMUX:-}" ]]; then
+    clipmode="$(tmux show -gv set-clipboard 2>/dev/null || echo unknown)"
+    case "$clipmode" in
+      on|external) printf '  tmux set-clipboard: %s (ok)\n' "$clipmode" ;;
+      *) warn "tmux is swallowing the app's copy requests (set-clipboard is '$clipmode')"
+         printf '  fix: tmux set -g set-clipboard on   (then detach/reattach)\n' ;;
+    esac
+  fi
+
+  printf '\nsecurity checks:\n';
+  local bad=0
   local bad=0
   if [[ -f "$AGENT_DIR/auth.json" ]]; then
     local perm; perm="$(stat -f '%Lp' "$AGENT_DIR/auth.json" 2>/dev/null || stat -c '%a' "$AGENT_DIR/auth.json" 2>/dev/null || echo '?')"
