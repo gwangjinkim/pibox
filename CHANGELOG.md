@@ -9,6 +9,9 @@
 - **Profiles survive inside the sandbox:** `sync` now seeds `profile-studio.json`
   into `.pibox/env` next to `settings.json`, so the extension finds your profiles
   instead of regenerating its defaults.
+- **Sync keeps disabled packages off:** `sync` now writes the object form
+  (`{source, extensions: [], ...}`) for packages the active profile disabled,
+  instead of switching every manifest extension back on.
 
 ## 1.6.0
 

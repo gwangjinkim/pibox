@@ -2282,7 +2282,7 @@ pnpm_store() {
 }
 
 sync_env() {
-  local root="$1" env store source version spec deps pkgs pm
+  local root="$1" env store source version spec deps pkgs pm disabled
   env="$(env_path "$root")"
   store="$(pnpm_store)"
   [[ -f "$(lock_path "$root")" ]] || write_lock_from_toml "$root"
@@ -2323,8 +2323,17 @@ sync_env() {
     PI_CODING_AGENT_DIR="$env" pi install "$spec" -na >/dev/null || { warn "failed to install $spec"; return 1; }
   done < <(jq -r '.extensions | to_entries[] | [.key, .value] | @tsv' "$(lock_path "$root")")
 
-  # settings.packages must mirror the manifest exactly
-  pkgs="$(jq -c '[.extensions | to_entries[] | .key + (if .value == "path" or .value == "" then "" else "@" + .value end)]' "$(lock_path "$root")")"
+  # settings.packages mirrors the manifest, except that packages the active
+  # profile disabled keep their {source, extensions: [], ...} object form (what
+  # pi-profile-studio writes) instead of being switched back on.
+  disabled='[]'
+  if [[ -f "$AGENT_DIR/settings.json" ]]; then
+    disabled="$(jq -c '[.packages[]? | objects | .source | select(type == "string")]' \
+      "$AGENT_DIR/settings.json" 2>/dev/null || printf '[]')"
+  fi
+  pkgs="$(jq -c --argjson off "$disabled" '[.extensions | to_entries[] | .key as $s | .value as $v
+    | if ($off | index($s)) then {source: $s, extensions: [], skills: [], prompts: [], themes: []}
+      else $s + (if $v == "path" or $v == "" then "" else "@" + $v end) end]' "$(lock_path "$root")")"
   jq --argjson p "$pkgs" '.packages = $p' "$env/settings.json" >"$env/settings.json.tmp.$$" \
     && mv "$env/settings.json.tmp.$$" "$env/settings.json"
 
